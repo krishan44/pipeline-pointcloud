@@ -1,52 +1,65 @@
-This README provides a comprehensive guide for users to run the Gradio Interface for testing out Open Source 3D Reconstruction Toolbox for Gaussian Splats
+# 🎬 3D Gaussian Splatting Gradio Web UI
 
-This guide will help you to do the following:
+A web-based interface for uploading 360° panorama images and reconstructing high-quality 3D Gaussian Splatting models.
 
-1. Set up the required environment
-2. Install necessary dependencies
-3. Run the application
-4. Understand the interface components
-5. Troubleshoot common issues
+## Features
 
-# Generate Splat Gradio Interface
+✨ **Easy Upload** - Drag & drop 360° images or video files  
+🎯 **Advanced Controls** - Fine-tune SfM, training steps, background removal, and more  
+📊 **Job Tracking** - Monitor reconstruction progress with real-time status updates  
+☁️ **AWS Integration** - Built-in S3 and Step Functions workflow  
+🤖 **GPU-Optimized** - Runs on GPU-enabled infrastructure for fast processing  
 
-This Gradio interface will provides a web-based user interface for generating 3D Gaussian Splatting models using Gradio for testing purposes between your local machine and AWS.
+## Quick Start
 
-## Prerequisites
+### Prerequisites
 
-- Python 3.8 or higher
-- pip (Python package installer)
+- Python 3.11+
+- AWS credentials configured (with S3 and Step Functions access)
+- Gradio and boto3 installed
 
-## Installation
+### Installation
 
-1. Create and activate a virtual environment (recommended) or use same environment as infrastructure deployment:
+1. Create and activate a virtual environment:
 
 ```bash
 python -m venv venv
-source venv/bin/activate # On Windows, use: venv\Scripts\activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-2. Install the required packages:
+2. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Configure the Application
+## Configuration
 
-Configure the Gradio Application to use the created bucket:
-  - Open `generate_splat_gradio.py` in a text editor
-  - Input the S3 bucket name into the `self.s3_bucket = ""` field
-  - Save the file and exit
+Set your AWS environment variables:
 
-## Authenticate with AWS
-- Confirm authenticated as the correct IAM principal and in the correct AWS account (see [get-caller-identity](https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/get-caller-identity.html) for more info).
+```bash
+export AWS_REGION=eu-west-2
+export S3_BUCKET=your-bucket-name
+export STEP_FUNCTION_ARN=arn:aws:states:eu-west-2:ACCOUNT:stateMachine:3dgs-workflow
+```
 
-    ```bash
-    aws sts get-caller-identity
-    ```
+Authenticate with AWS:
+
+```bash
+aws configure
+# or verify existing credentials:
+aws sts get-caller-identity
+```
 
 ## Running the Application
+
+### Local Development
+
+```bash
+python app.py
+```
+
+Open browser to: **http://localhost:7860**
 
 - Start the Gradio interface:
 

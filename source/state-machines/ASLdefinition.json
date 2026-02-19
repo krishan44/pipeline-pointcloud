@@ -1,17 +1,25 @@
 {
-  "StartAt": "HandleConfigError",
+  "StartAt": "PreparePayload",
   "States": {
-    "HandleConfigError": {
-      "Type": "Choice",
-      "InputPath": "$",
-      "Choices": [
-        {
-          "Variable": "$.stateMachine.statusCode",
-          "NumericEquals": 200,
-          "Next": "InvokeGSWorkflow"
-        }
-      ],
-      "Default": "FailState"
+    "PreparePayload": {
+      "Type": "Pass",
+      "Parameters": {
+        "envVars.$": "$",
+        "stateMachine": {
+          "statusCode": 200,
+          "instanceCount": 1,
+          "volumeSizeInGB": 100,
+          "timeout": 86400,
+          "instanceType": "ml.p3.2xlarge",
+          "ecrImageArn.$": "$.ECR_IMAGE_URI",
+          "containerRoleArn.$": "$.CONTAINER_ROLE_ARN",
+          "completeLambdaName.$": "$.LAMBDA_COMPLETE_NAME",
+          "containerEntryPoint": ["python"],
+          "containerArgs": ["main.py"]
+        },
+        "sns.$": "$.SNS_TOPIC_ARN"
+      },
+      "Next": "InvokeGSWorkflow"
     },
     "InvokeGSWorkflow": {
       "Type": "Task",
@@ -22,7 +30,7 @@
         "TrainingJobName.$": "$.envVars.UUID",
         "ResourceConfig": {
           "InstanceCount.$": "$.stateMachine.instanceCount",
-          "InstanceType.$": "$.envVars.INSTANCE_TYPE",
+          "InstanceType.$": "$.stateMachine.instanceType",
           "VolumeSizeInGB.$": "$.stateMachine.volumeSizeInGB"
         },
         "AlgorithmSpecification": {
@@ -40,21 +48,11 @@
         "RoleArn.$": "$.stateMachine.containerRoleArn",
         "InputDataConfig": [
           {
-            "ChannelName.$": "$.envVars.DATA_CHANNEL",
+            "ChannelName": "training",
             "DataSource": {
               "S3DataSource": {
                 "S3DataType": "S3Prefix",
                 "S3Uri.$": "$.envVars.S3_INPUT",
-                "S3DataDistributionType": "FullyReplicated"
-              }
-            }
-          },
-          {
-            "ChannelName": "model",
-            "DataSource": {
-              "S3DataSource": {
-                "S3DataType": "S3Prefix",
-                "S3Uri.$": "$.envVars.MODEL_INPUT",
                 "S3DataDistributionType": "FullyReplicated"
               }
             }
@@ -118,20 +116,6 @@
         "sns.$": "$.sns",
         "status": "SUCCESS",
         "result.$": "$.invokeWorkflow"
-      },
-      "Next": "Complete"
-    },
-    "FailState": {
-      "Type": "Pass",
-      "Parameters": {
-        "stateMachine.$": "$.stateMachine",
-        "envVars.$": "$.envVars",
-        "sns.$": "$.sns",
-        "status": "FAILED",
-        "error": {
-          "Error": "ConfigurationError",
-          "Cause": "Invalid status code in configuration"
-        }
       },
       "Next": "Complete"
     },

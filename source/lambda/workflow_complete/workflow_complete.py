@@ -575,18 +575,32 @@ This is an automated message from the Splat Processing System"""
         expression_attribute_values = {':uuidStatus': 'Error'}
         update_ddb_item_value(table, key, update_expression, expression_attribute_values)
 
-        # Always try to get container logs first
-        container_logs = get_cloudwatch_logs(training_job_name)
+        # Always try to get container logs first (if training_job_name was set)
+        container_logs = {}
+        try:
+            if 'training_job_name' in locals():
+                container_logs = get_cloudwatch_logs(training_job_name)
+            elif 'envVars' in event and 'UUID' in event['envVars']:
+                container_logs = get_cloudwatch_logs(str(event['envVars']['UUID']))
+        except Exception as log_error:
+            print(f"Could not retrieve container logs: {log_error}")
+            container_logs = {'status': 'ERROR', 'message': 'Could not retrieve logs'}
         
         error_message = container_logs.get('message', '')
         
         # Handle error cases with detailed logging
+        # Safely resolve any existing 'error' value from the event or locals
+        if 'error' in locals() and locals().get('error') is not None:
+            error_val = locals().get('error')
+        else:
+            error_val = event.get('error', None)
+
         error_details = {
             'statusCode': 500,
             'body': {
                 'status': 'Failed',
                 'containerError': container_logs['message'] if container_logs.get('status') == 'ERROR' else 'No container errors found',
-                'error': str(e) if not error else error
+                'error': str(e) if not error_val else error_val
             }
         }
         

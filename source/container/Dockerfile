@@ -221,7 +221,10 @@ WORKDIR ${CODE_PATH}
 RUN git clone https://github.com/nerfstudio-project/gsplat.git --recursive
 WORKDIR ${CODE_PATH}/gsplat
 #RUN pip install -e .
-RUN pip install -r examples/requirements.txt
+RUN pip install wheel setuptools
+# Skip ppisp (optional, fails with CUDA 11.8 due to unsupported compute_120 arch)
+RUN grep -v "ppisp" examples/requirements.txt > /tmp/requirements_filtered.txt && \
+    pip install --no-build-isolation -r /tmp/requirements_filtered.txt
 WORKDIR ${CODE_PATH}
 RUN pip install git+https://github.com/nerfstudio-project/gsplat.git
 
@@ -289,7 +292,9 @@ WORKDIR ${CODE_PATH}
 # Build NVIDIA 3DGRUT
 RUN git clone --recursive https://github.com/nv-tlabs/3dgrut.git
 WORKDIR ${CODE_PATH}/3dgrut
-RUN python -m pip install -r requirements.txt
+# Skip ppisp (optional) and avoid build isolation so torch is visible
+RUN grep -v "ppisp" requirements.txt > /tmp/3dgrut_requirements_filtered.txt && \
+    python -m pip install --no-build-isolation -r /tmp/3dgrut_requirements_filtered.txt
 WORKDIR ${CODE_PATH}
 
 # The main entrypoint and arguments are added into the container in the State Machine (e.g. ENTRYPOINT [ "python", "main.py" ])
