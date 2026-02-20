@@ -37,6 +37,47 @@ CONFIG = {
     'ALLOWED_FORMATS': ['.png', '.PNG', '.jpg', '.JPG', '.jpeg', '.JPEG', '.mp4', '.MP4', '.mov', '.MOV']
 }
 
+# If CDK outputs are available, prefer them over hard-coded defaults / env vars.
+try:
+    outputs_path = Path(__file__).resolve().parents[2] / 'deployment' / 'cdk' / 'outputs.json'
+    if outputs_path.exists():
+        with outputs_path.open('r', encoding='utf-8') as f:
+            outputs_data = json.load(f)
+
+        if 'GSWorkflowBaseStack' in outputs_data:
+            base = outputs_data['GSWorkflowBaseStack']
+            # Region
+            CONFIG['REGION'] = base.get('Region', CONFIG['REGION'])
+            # S3 bucket
+            CONFIG['S3_BUCKET'] = base.get('S3BucketName', base.get('S3ConstructBucketName77DC70F6', CONFIG['S3_BUCKET']))
+            # ECR image (construct using account from role ARN if present)
+            container_role = base.get('ContainerRoleArn')
+            account = None
+            if container_role and isinstance(container_role, str):
+                parts = container_role.split(':')
+                if len(parts) >= 5:
+                    account = parts[4]
+
+            state_machine_name = base.get('StateMachineName')
+            if account and state_machine_name:
+                CONFIG['STEP_FUNCTION_ARN'] = f"arn:aws:states:{CONFIG['REGION']}:{account}:stateMachine:{state_machine_name}"
+
+            ecr_name = base.get('ECRRepoName')
+            if account and ecr_name:
+                CONFIG['ECR_IMAGE_URI'] = f"{account}.dkr.ecr.{CONFIG['REGION']}.amazonaws.com/{ecr_name}:latest"
+
+            # Role / lambda / sns
+            if base.get('ContainerRoleArn'):
+                CONFIG['CONTAINER_ROLE_ARN'] = base['ContainerRoleArn']
+            if base.get('LambdaWorkflowCompleteFunctionName'):
+                CONFIG['LAMBDA_COMPLETE_NAME'] = base['LambdaWorkflowCompleteFunctionName']
+            if base.get('SnsTopicArn'):
+                CONFIG['SNS_TOPIC_ARN'] = base['SnsTopicArn']
+
+except Exception:
+    # Non-fatal: fall back to env/defaults
+    pass
+
 class GaussianSplattingUI:
     """Manages the Gaussian Splatting reconstruction workflow"""
     

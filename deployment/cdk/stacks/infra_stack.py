@@ -56,7 +56,10 @@ class GSWorkflowBaseStack(Stack):
         # Initialize Ids and Variables
         self.prefix = config_data['constructNamePrefix']
         self.s3_trigger_key = config_data['s3TriggerKey']
-        self.random_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        configured_suffix = config_data.get('resourceSuffix')
+        self.random_id = configured_suffix if configured_suffix else ''.join(
+            random.choices(string.ascii_lowercase + string.digits, k=6)
+        )
         self.bucket_name = f"{self.prefix}-bucket-{self.random_id}"
         self.ecr_repo_name = f"{self.prefix}-ecr-repo-{self.random_id}"
         self.sfn_ssm_param_name = f"{self.prefix}-sfn-arn-{self.random_id}"

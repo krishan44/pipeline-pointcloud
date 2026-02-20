@@ -3,6 +3,7 @@
     "accountId": "762233765429",
     "region": "eu-west-2",
     "constructNamePrefix": "3dgs",
+    "resourceSuffix": "o7vo1a",
     "s3TriggerKey": "workflow-input",
     "adminEmail": "kavindukrishan986@gmail.com",
     "maintainS3ObjectsOnStackDeletion": "true"

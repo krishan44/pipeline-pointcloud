@@ -82,6 +82,11 @@ if select_all or bundling_stacks is None or len(bundling_stacks) == 0 or (bundli
             with open(outputs_path, "r", encoding="utf-8") as f:
                 output_data = json.load(f)
                 print(f"Successfully loaded outputs data: {list(output_data.keys()) if output_data else 'empty'}")
+
+            if not output_data or 'GSWorkflowBaseStack' not in output_data:
+                raise FileNotFoundError(
+                    "Base stack outputs missing in outputs.json. Deploy GSWorkflowBaseStack first with --outputs-file outputs.json"
+                )
             
             post_deploy_stack = GSWorkflowPostDeployStack(
                 scope=app,
