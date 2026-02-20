@@ -23,11 +23,20 @@ and start the workflow """
 
 import os
 import json
+import base64
 import boto3
 from datetime import datetime
 import urllib.parse
 import traceback
 from botocore.exceptions import ClientError
+# Import EC2 helper
+try:
+    from ec2_userdata_helper import generate_user_data, map_instance_type
+except ImportError:
+    # Fallback for local testing
+    import sys
+    sys.path.append(os.path.dirname(__file__))
+    from ec2_userdata_helper import generate_user_data, map_instance_type
 
 # initialize boto3 clients 
 stepfunctions = boto3.client('stepfunctions')
@@ -217,65 +226,64 @@ def lambda_handler(event, context):
                     }
                     raise SystemError(json.dumps(errorObj))
 
+            # Map instance type from SageMaker to EC2
+            ec2_instance_type = map_instance_type(json_content["instanceType"])
+            
+            # Prepare environment variables for user data script
+            env_vars_for_userdata = {
+                "UUID": str(uuid),
+                "S3_INPUT": f"s3://{json_content['s3']['bucketName']}/{json_content['s3']['inputPrefix']}/{json_content['s3']['inputKey']}",
+                "S3_OUTPUT": f"s3://{json_content['s3']['bucketName']}/{json_content['s3']['outputPrefix']}",
+                "FILENAME": str(json_content["s3"]["inputKey"]),
+                "INPUT_PREFIX": str(json_content["s3"]["inputPrefix"]),
+                "OUTPUT_PREFIX": str(json_content["s3"]["outputPrefix"]),
+                "S3_BUCKET_NAME": str(json_content["s3"]["bucketName"]),
+                "MAX_NUM_IMAGES": str(json_content["videoProcessing"]["maxNumImages"]),
+                "FILTER_BLURRY_IMAGES": str(json_content["imageProcessing"]["filterBlurryImages"]),
+                "RUN_SFM": str(json_content["sfm"]["enable"]),
+                "SFM_SOFTWARE_NAME": str(json_content["sfm"]["softwareName"]),
+                "USE_POSE_PRIOR_COLMAP_MODEL_FILES": str(json_content["sfm"]["posePriors"]["usePosePriorColmapModelFiles"]),
+                "USE_POSE_PRIOR_TRANSFORM_JSON": str(json_content["sfm"]["posePriors"]["usePosePriorTransformJson"]["enable"]),
+                "SOURCE_COORD_NAME": str(json_content["sfm"]["posePriors"]["usePosePriorTransformJson"]["sourceCoordinateName"]),
+                "POSE_IS_WORLD_TO_CAM": str(json_content["sfm"]["posePriors"]["usePosePriorTransformJson"]["poseIsWorldToCam"]),
+                "ENABLE_ENHANCED_FEATURE_EXTRACTION": str(json_content["sfm"]["enableEnhancedFeatureExtraction"]),
+                "MATCHING_METHOD": str(json_content["sfm"]["matchingMethod"]),
+                "RUN_TRAIN": str(json_content["training"]["enable"]),
+                "MODEL": str(json_content["training"]["model"]),
+                "MAX_STEPS": str(json_content["training"]["maxSteps"]),
+                "ENABLE_MULTI_GPU": str(json_content["training"]["enableMultiGpu"]),
+                "ROTATE_SPLAT": str(json_content["training"]["rotateSplat"]),
+                "SPHERICAL_CAMERA": str(json_content["sphericalCamera"]["enable"]),
+                "SPHERICAL_CUBE_FACES_TO_REMOVE": str(json_content["sphericalCamera"]["cubeFacesToRemove"]),
+                "OPTIMIZE_SEQUENTIAL_SPHERICAL_FRAME_ORDER": str(json_content["sphericalCamera"]["optimizeSequentialFrameOrder"]),
+                "REMOVE_BACKGROUND": str(json_content["segmentation"]["removeBackground"]),
+                "BACKGROUND_REMOVAL_MODEL": str(json_content["segmentation"]["backgroundRemovalModel"]),
+                "MASK_THRESHOLD": str(json_content["segmentation"]["maskThreshold"]),
+                "REMOVE_HUMAN_SUBJECT": str(json_content["segmentation"]["removeHumanSubject"]),
+                "LOG_VERBOSITY": str(json_content["logVerbosity"])
+            }
+            
+            # Generate user data script
+            user_data_base64 = generate_user_data(env_vars_for_userdata, os.environ["ECR_IMAGE_URI"])
+
             inputObj = {
-                "stateMachine" : {
-                    "timeout": 28800,
-                    "instanceCount": 1,
-                    "volumeSizeInGB": 25,
-                    "ecrImageArn": os.environ["ECR_IMAGE_URI"],
-                    "containerEntryPoint": ["python"],
-                    "containerArgs": ["/opt/ml/code/main.py"],
-                    "containerRoleArn": f"arn:aws:iam::{account_id}:role/{os.environ["CONTAINER_ROLE_NAME"]}",
-                    "completeLambdaName": os.environ['LAMBDA_COMPLETE_NAME'],
-                    "startTimestamp": datestamp
-                },
-                "envVars": {
-                    "UUID": str(uuid),
-                    "DATA_CHANNEL": "train",
-                    "MODEL_INPUT": f"s3://{json_content["s3"]["bucketName"]}/models/models.tar.gz",
-                    "S3_INPUT": f"s3://{json_content["s3"]["bucketName"]}/{json_content["s3"]["inputPrefix"]}/{json_content["s3"]["inputKey"]}",
-                    "S3_OUTPUT": f"s3://{json_content["s3"]["bucketName"]}/{json_content["s3"]["outputPrefix"]}",
-                    "FILENAME": str(json_content["s3"]["inputKey"]),
-                    "INSTANCE_TYPE": str(json_content["instanceType"]),
-                    "LOG_VERBOSITY": str(json_content["logVerbosity"]),
-                    "MAX_NUM_IMAGES": str(json_content["videoProcessing"]["maxNumImages"]),
-                    "FILTER_BLURRY_IMAGES": str(json_content["imageProcessing"]["filterBlurryImages"]),
-                    "RUN_SFM": str(json_content["sfm"]["enable"]),
-                    "SFM_SOFTWARE_NAME": str(json_content["sfm"]["softwareName"]),
-                    "USE_POSE_PRIOR_COLMAP_MODEL_FILES": str(json_content["sfm"]["posePriors"]["usePosePriorColmapModelFiles"]),
-                    "USE_POSE_PRIOR_TRANSFORM_JSON": str(json_content["sfm"]["posePriors"]["usePosePriorTransformJson"]["enable"]),
-                    "SOURCE_COORD_NAME": str(json_content["sfm"]["posePriors"]["usePosePriorTransformJson"]["sourceCoordinateName"]),
-                    "POSE_IS_WORLD_TO_CAM": str(json_content["sfm"]["posePriors"]["usePosePriorTransformJson"]["poseIsWorldToCam"]),
-                    "ENABLE_ENHANCED_FEATURE_EXTRACTION": str(json_content["sfm"]["enableEnhancedFeatureExtraction"]),
-                    "MATCHING_METHOD": str(json_content["sfm"]["matchingMethod"]),
-                    "RUN_TRAIN": str(json_content["training"]["enable"]),
-                    "MODEL": str(json_content["training"]["model"]),
-                    "MAX_STEPS": str(json_content["training"]["maxSteps"]),
-                    "ENABLE_MULTI_GPU": str(json_content["training"]["enableMultiGpu"]),
-                    "ROTATE_SPLAT": str(json_content["training"]["rotateSplat"]),
-                    "SPHERICAL_CAMERA": str(json_content["sphericalCamera"]["enable"]),
-                    "SPHERICAL_CUBE_FACES_TO_REMOVE": str(json_content["sphericalCamera"]["cubeFacesToRemove"]),
-                    "OPTIMIZE_SEQUENTIAL_SPHERICAL_FRAME_ORDER": str(json_content["sphericalCamera"]["optimizeSequentialFrameOrder"]),
-                    "REMOVE_BACKGROUND": str(json_content["segmentation"]["removeBackground"]),
-                    "BACKGROUND_REMOVAL_MODEL": str(json_content["segmentation"]["backgroundRemovalModel"]),
-                    "MASK_THRESHOLD": str(json_content["segmentation"]["maskThreshold"]),
-                    "REMOVE_HUMAN_SUBJECT": str(json_content["segmentation"]["removeHumanSubject"])
-                },
-                "sns": {
-                    "topicArn": os.environ["SNS_TOPIC_ARN"],
-                    "message": f"Your 3D reconstruction from file {str(json_content["s3"]["inputKey"])} is ready to view at \
-                        {f"s3://{json_content["s3"]["bucketName"]}/{json_content["s3"]["outputPrefix"]}"}/{str(json_content["uuid"])}"
-                }
+                "UUID": str(uuid),
+                "INSTANCE_TYPE": ec2_instance_type,
+                "LAUNCH_TEMPLATE_ID": os.environ["LAUNCH_TEMPLATE_ID"],
+                "IMAGE_ID": "",  # Will use the one from launch template
+                "ECR_IMAGE_URI": os.environ["ECR_IMAGE_URI"],
+                "LAMBDA_COMPLETE_NAME": os.environ['LAMBDA_COMPLETE_NAME'],
+                "SNS_TOPIC_ARN": os.environ["SNS_TOPIC_ARN"],
+                "INSTANCE_PROFILE_ARN": os.environ["INSTANCE_PROFILE_ARN"],
+                "AWS_REGION": region,
+                "USER_DATA_BASE64": user_data_base64,
+                "S3_INPUT": f"s3://{json_content['s3']['bucketName']}/{json_content['s3']['inputPrefix']}/{json_content['s3']['inputKey']}",
+                "S3_OUTPUT": f"s3://{json_content['s3']['bucketName']}/{json_content['s3']['outputPrefix']}",
+                "startTimestamp": datestamp
             }
             print(f"Input Object is: {inputObj}")
         except Exception as e:
-            status = (f"Error getting payload: {traceback.format_exc()}")
-            raise Exception(status)
-
-        # Start the step function workflow
-        try:
-            print("Starting Step Function Workflow")
-            inputObj['stateMachine']['statusCode'] = 200
+            status = (f"Error getting payload: {tr with EC2")
             # Send the message to start the State Machine
             response = stepfunctions.start_execution(
                 stateMachineArn=state_machine_arn,
@@ -291,6 +299,11 @@ def lambda_handler(event, context):
             'body': json.dumps(inputObj)
         }
     else:
+        inputObj = {}
+        inputObj['statusCode'] = response['status_code']
+        inputObj['body'] = response['body']
+        inputObj['SNS_TOPIC_ARN'] = os.environ["SNS_TOPIC_ARN"]
+        inputObj
         inputObj = {}
         inputObj['stateMachine']['statusCode'] = response['status_code']
         inputObj['stateMachine']['body'] = response['body']

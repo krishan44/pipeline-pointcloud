@@ -107,6 +107,22 @@ class Sfn(Construct):
             ]
         )
 
+        # EC2 permissions for launching and managing instances
+        ec2_statement = iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "ec2:RunInstances",
+                "ec2:TerminateInstances",
+                "ec2:DescribeInstances",
+                "ec2:DescribeInstanceStatus",
+                "ec2:StopInstances",
+                "ec2:StartInstances",
+                "ec2:CreateTags"
+            ],
+            resources=["*"]
+        )
+
+        # Optional: Keep SageMaker for backward compatibility
         sagemaker_training_statement = iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
@@ -118,16 +134,6 @@ class Sfn(Construct):
                 f"arn:aws:sagemaker:{env.region}:{env.account}:training-job/*"
             ]
         )
-
-        #sagemaker_tags_statement = iam.PolicyStatement(
-        #    effect=iam.Effect.ALLOW,
-        #    actions=[
-        #        "sagemaker:ListTags"
-        #        ],
-        #    resources=[
-        #        "*"
-        #    ]
-        #)
 
         container_role = iam.Role.from_role_name(
             self,
@@ -241,12 +247,12 @@ class Sfn(Construct):
             policy_name="SageMakerTrainingPolicy",
             statements=[
                 sagemaker_training_statement,
-                #sagemaker_tags_statement,
                 sagemaker_pass_role_statement,
                 sagemaker_eventbridge_statement,
                 ecr_statement,
                 iam_statement,
-                step_functions_statement
+                step_functions_statement,
+                ec2_statement  # Add EC2 permissions
                 ]
             )
         )

@@ -1,0 +1,161 @@
+{
+  "Comment": "Gaussian Splatting workflow using EC2 Spot instances",
+  "StartAt": "PreparePayload",
+  "States": {
+    "PreparePayload": {
+      "Type": "Pass",
+      "Parameters": {
+        "envVars.$": "$",
+        "ec2Config": {
+          "instanceType.$": "$.INSTANCE_TYPE",
+          "launchTemplateId.$": "$.LAUNCH_TEMPLATE_ID",
+          "imageId.$": "$.IMAGE_ID",
+          "volumeSizeInGB": 100,
+          "timeout": 86400,
+          "ecrImageUri.$": "$.ECR_IMAGE_URI",
+          "completeLambdaName.$": "$.LAMBDA_COMPLETE_NAME",
+          "region.$": "$.AWS_REGION",
+          "instanceProfileArn.$": "$.INSTANCE_PROFILE_ARN"
+        },
+        "sns.$": "$.SNS_TOPIC_ARN"
+      },
+      "Next": "LaunchEC2Instance"
+    },
+    "LaunchEC2Instance": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:runInstances",
+      "Parameters": {
+        "MaxCount": 1,
+        "MinCount": 1,
+        "LaunchTemplate": {
+          "LaunchTemplateId.$": "$.ec2Config.launchTemplateId"
+        },
+        "InstanceType.$": "$.ec2Config.instanceType",
+        "UserData.$": "$.envVars.USER_DATA_BASE64"
+      },
+      "ResultPath": "$.launchResult",
+      "Next": "WaitForCompletion",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Ec2.InsufficientInstanceCapacity",
+            "Ec2.SpotMaxPriceTooLow"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        },
+        {
+          "ErrorEquals": [
+            "States.Timeout"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "ErrorHandler"
+        }
+      ]
+    },
+    "WaitForCompletion": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Comment": "Wait 5 minutes before checking instance status",
+      "Next": "CheckInstanceStatus"
+    },
+    "CheckInstanceStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstances",
+      "Parameters": {
+        "InstanceIds.$": "States.Array($.launchResult.Instances[0].InstanceId)"
+      },
+      "ResultPath": "$.instanceStatus",
+      "Next": "EvaluateInstanceState"
+    },
+    "EvaluateInstanceState": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.instanceStatus.Reservations[0].Instances[0].State.Name",
+          "StringEquals": "terminated",
+          "Next": "SuccessHandler"
+        },
+        {
+          "Or": [
+            {
+              "Variable": "$.instanceStatus.Reservations[0].Instances[0].State.Name",
+              "StringEquals": "running"
+            },
+            {
+              "Variable": "$.instanceStatus.Reservations[0].Instances[0].State.Name",
+              "StringEquals": "stopping"
+            },
+            {
+              "Variable": "$.instanceStatus.Reservations[0].Instances[0].State.Name",
+              "StringEquals": "shutting-down"
+            }
+          ],
+          "Next": "WaitForCompletion"
+        }
+      ],
+      "Default": "ErrorHandler"
+    },
+    "ErrorHandler": {
+      "Type": "Pass",
+      "Parameters": {
+        "ec2Config.$": "$.ec2Config",
+        "envVars.$": "$.envVars",
+        "sns.$": "$.sns",
+        "error.$": "$.error",
+        "status": "FAILED"
+      },
+      "Next": "CleanupEC2",
+      "Comment": "Handle errors and prepare for cleanup"
+    },
+    "CleanupEC2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:terminateInstances",
+      "Parameters": {
+        "InstanceIds.$": "States.Array($.launchResult.Instances[0].InstanceId)"
+      },
+      "ResultPath": "$.cleanupResult",
+      "Next": "Complete",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.cleanupError",
+          "Next": "Complete"
+        }
+      ]
+    },
+    "SuccessHandler": {
+      "Type": "Pass",
+      "Parameters": {
+        "ec2Config.$": "$.ec2Config",
+        "envVars.$": "$.envVars",
+        "sns.$": "$.sns",
+        "status": "SUCCESS",
+        "result.$": "$.instanceStatus"
+      },
+      "Next": "Complete"
+    },
+    "Complete": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "InputPath": "$",
+      "ResultPath": "$.complete",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName.$": "$.ec2Config.completeLambdaName"
+      },
+      "End": true
+    }
+  }
+}

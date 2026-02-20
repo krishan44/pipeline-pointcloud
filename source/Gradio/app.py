@@ -2,9 +2,11 @@
 """
 Gradio Web UI for 3D Gaussian Splatting Reconstruction
 Allows users to upload 360° panorama images and submit jobs to AWS
+Now optimized for EC2 Spot instances - 95% cost savings vs SageMaker!
 """
 
 import os
+import sys
 import json
 import uuid
 import boto3
@@ -14,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 import zipfile
 import shutil
+
+# Add lambda workflow_trigger to path for helper functions
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambda', 'workflow_trigger'))
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,10 +31,12 @@ stepfunctions_client = boto3.client('stepfunctions')
 # Configuration
 CONFIG = {
     'REGION': os.getenv('AWS_REGION', 'eu-west-2'),
-    'S3_BUCKET': os.getenv('S3_BUCKET', '3dgs-bucket-uqgdnb'),
-    'STEP_FUNCTION_ARN': os.getenv('STEP_FUNCTION_ARN', 'arn:aws:states:eu-west-2:762233765429:stateMachine:3dgs-sfn-uqgdnb'),
-    'ECR_IMAGE_URI': os.getenv('ECR_IMAGE_URI', '762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-uqgdnb:latest'),
-    'CONTAINER_ROLE_ARN': os.getenv('CONTAINER_ROLE_ARN', 'arn:aws:iam::762233765429:role/3dgs-container-role-uqgdnb'),
+    'S3_BUCKET': os.getenv('S3_BUCKET', '3dgs-bucket-o7vo1a'),
+    'LAUNCH_TEMPLATE_ID': os.getenv('LAUNCH_TEMPLATE_ID', 'lt-019ca2afbe5567fed'),  # EC2 launch template
+    'INSTANCE_PROFILE_ARN': os.getenv('INSTANCE_PROFILE_ARN', 'arn:aws:iam::762233765429:instance-profile/3dgs-ec2-instance-profile'),  # EC2 instance profile
+    'STEP_FUNCTION_ARN': os.getenv('STEP_FUNCTION_ARN', 'arn:aws:states:eu-west-2:762233765429:stateMachine:3dgs-sfn-o7vo1a'),
+    'ECR_IMAGE_URI': os.getenv('ECR_IMAGE_URI', '762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-o7vo1a:latest'),
+    'CONTAINER_ROLE_ARN': os.getenv('CONTAINER_ROLE_ARN', 'arn:aws:iam::762233765429:role/3dgs-container-role-o7vo1a'),
     'LAMBDA_COMPLETE_NAME': os.getenv('LAMBDA_COMPLETE_NAME', 'GSWorkflowBaseStack-LambdaWorkflowCompleteConstruc-jz8aScDJQjAJ'),
     'SNS_TOPIC_ARN': os.getenv('SNS_TOPIC_ARN', 'arn:aws:sns:eu-west-2:762233765429:GSWorkflowBaseStack-NotificationConstructNotificationTopic211862B9-iZhUklp0F1q7'),
     'MAX_UPLOAD_SIZE_MB': 500,  # 500 MB max
@@ -161,29 +168,83 @@ class GaussianSplattingUI:
         if not success:
             return f"❌ Upload Failed: {upload_msg}"
         
-        # Prepare Step Function input
+        # Prepare Step Function input for EC2 workflow
         _, input_filename = self._resolve_file(files[0])  # Use first file's original name as primary input
         
-        step_function_input = {
+        # Get launch template ID and instance profile from CONFIG
+        launch_template_id = CONFIG['LAUNCH_TEMPLATE_ID']
+        instance_profile_arn = CONFIG['INSTANCE_PROFILE_ARN']
+        
+        # Map to EC2 instance type (automatically uses cost-effective GPU instances)
+        instance_type = 'g4dn.xlarge'  # Default GPU instance
+        
+        # Prepare environment variables for EC2 user data
+        env_vars = {
             "UUID": job_uuid,
-            "EMAIL": email,
-            "JOB_NAME": job_name,
             "S3_INPUT": f"s3://{CONFIG['S3_BUCKET']}/input/{job_uuid}",
             "S3_OUTPUT": f"s3://{CONFIG['S3_BUCKET']}/output/{job_uuid}",
             "FILENAME": input_filename,
+            "INPUT_PREFIX": f"input/{job_uuid}",
+            "OUTPUT_PREFIX": f"output",
+            "S3_BUCKET_NAME": CONFIG['S3_BUCKET'],
+            "MAX_NUM_IMAGES": "300",
             "FILTER_BLURRY_IMAGES": str(filter_blurry).lower(),
             "RUN_SFM": str(run_sfm).lower(),
             "SFM_SOFTWARE_NAME": sfm_software,
-            "GENERATE_SPLAT": str(generate_splat).lower(),
+            "USE_POSE_PRIOR_COLMAP_MODEL_FILES": "false",
+            "USE_POSE_PRIOR_TRANSFORM_JSON": "false",
+            "SOURCE_COORD_NAME": "opencv",
+            "POSE_IS_WORLD_TO_CAM": "true",
+            "ENABLE_ENHANCED_FEATURE_EXTRACTION": "false",
+            "MATCHING_METHOD": "exhaustive",
+            "RUN_TRAIN": str(generate_splat).lower(),
+            "MODEL": "splatfacto",
             "MAX_STEPS": str(int(max_steps)),
-            "REMOVE_BACKGROUND": str(remove_background).lower(),
-            "SPHERICAL_CAMERA": str(spherical_camera).lower(),
+            "ENABLE_MULTI_GPU": "false",
             "ROTATE_SPLAT": str(rotate_splat).lower(),
-            # Configuration passed to Step Function for SageMaker training job
+            "SPHERICAL_CAMERA": str(spherical_camera).lower(),
+            "SPHERICAL_CUBE_FACES_TO_REMOVE": "",
+            "OPTIMIZE_SEQUENTIAL_SPHERICAL_FRAME_ORDER": "false",
+            "REMOVE_BACKGROUND": str(remove_background).lower(),
+            "BACKGROUND_REMOVAL_MODEL": "sam2",
+            "MASK_THRESHOLD": "0.5",
+            "REMOVE_HUMAN_SUBJECT": "false",
+            "LOG_VERBOSITY": "info"
+        }
+        
+        # Generate user data script
+        from ec2_userdata_helper import generate_user_data
+        try:
+            user_data_base64 = generate_user_data(env_vars, CONFIG['ECR_IMAGE_URI'])
+        except ImportError:
+            # Fallback: generate inline if helper not available
+            import base64
+            logger.warning("ec2_userdata_helper not found, using simplified user data")
+            user_data_script = f"""#!/bin/bash
+set -e
+aws ecr get-login-password --region {CONFIG['REGION']} | docker login --username AWS --password-stdin {CONFIG['ECR_IMAGE_URI'].split('/')[0]}
+docker pull {CONFIG['ECR_IMAGE_URI']}
+docker run --gpus all --rm {' '.join([f'-e {k}="{v}"' for k, v in env_vars.items()])} {CONFIG['ECR_IMAGE_URI']}
+aws ec2 terminate-instances --instance-ids $(ec2-metadata --instance-id | cut -d " " -f 2) --region {CONFIG['REGION']}
+"""
+            user_data_base64 = base64.b64encode(user_data_script.encode('utf-8')).decode('utf-8')
+        
+        # EC2-based Step Function input
+        step_function_input = {
+            "UUID": job_uuid,
+            "INSTANCE_TYPE": instance_type,
+            "LAUNCH_TEMPLATE_ID": launch_template_id,
+            "IMAGE_ID": "",  # Will use the one from launch template
             "ECR_IMAGE_URI": CONFIG['ECR_IMAGE_URI'],
-            "CONTAINER_ROLE_ARN": CONFIG['CONTAINER_ROLE_ARN'],
             "LAMBDA_COMPLETE_NAME": CONFIG['LAMBDA_COMPLETE_NAME'],
-            "SNS_TOPIC_ARN": CONFIG['SNS_TOPIC_ARN']
+            "SNS_TOPIC_ARN": CONFIG['SNS_TOPIC_ARN'],
+            "INSTANCE_PROFILE_ARN": instance_profile_arn,
+            "AWS_REGION": CONFIG['REGION'],
+            "USER_DATA_BASE64": user_data_base64,
+            "S3_INPUT": f"s3://{CONFIG['S3_BUCKET']}/input/{job_uuid}",
+            "S3_OUTPUT": f"s3://{CONFIG['S3_BUCKET']}/output/{job_uuid}",
+            "EMAIL": email,
+            "JOB_NAME": job_name
         }
         
         try:
@@ -502,34 +563,6 @@ def create_gradio_interface():
                 - **training_logs.txt** - Processing logs
                 
                 **Tip:** Click "List Files" first to see all available files for your job!
-                """)
-            
-            # ===== INFO TAB =====
-            with gr.TabItem("ℹ️ Info & Help"):
-                gr.Markdown(f"""
-                ### Configuration
-                - **AWS Region:** {CONFIG['REGION']}
-                - **S3 Bucket:** {CONFIG['S3_BUCKET']}
-                - **ECR Image:** {CONFIG['ECR_IMAGE_URI']}
-                - **Max Upload Size:** {CONFIG['MAX_UPLOAD_SIZE_MB']} MB
-                - **Supported Formats:** {', '.join(CONFIG['ALLOWED_FORMATS'])}
-                
-                ### Pipeline Steps
-                1. **Upload** - Your images/video to S3
-                2. **Process** - Extract frames, filter, segment
-                3. **SfM** - Estimate camera poses (GLOMAP/COLMAP)
-                4. **Train** - Generate Gaussian Splatting model (NerfStudio)
-                5. **Export** - Convert to PLY/SPZ format
-                6. **Download** - Retrieve your model from S3
-                
-                ### Best Practices for 360° Images
-                - **Format:** PNG or JPG (300+ images recommended)
-                - **Resolution:** 3840x1920 or higher
-                - **Coverage:** Full 360° panorama with overlap
-                - **Equirectangular:** Recommended for panorama mode
-                
-                ### Support
-                For issues or questions, contact: support@example.com
                 """)
     
     return app

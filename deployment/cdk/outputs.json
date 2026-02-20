@@ -1,2 +1,22 @@
 {
+  "GSWorkflowBaseStack": {
+    "Ec2ComputeConstructInstanceRoleName072A3096": "3dgs-ec2-instance-role",
+    "LaunchTemplateId": "lt-019ca2afbe5567fed",
+    "S3ConstructBucketName77DC70F6": "3dgs-bucket-o7vo1a",
+    "ECRRepoName": "3dgs-ecr-repo-o7vo1a",
+    "InstanceProfileArn": "arn:aws:iam::762233765429:instance-profile/3dgs-ec2-instance-profile",
+    "ContainerRoleArn": "arn:aws:iam::762233765429:role/3dgs-container-role-o7vo1a",
+    "Ec2ComputeConstructInstanceProfileArnB2A78E7B": "arn:aws:iam::762233765429:instance-profile/3dgs-ec2-instance-profile",
+    "SnsTopicName": "GSWorkflowBaseStack-NotificationConstructNotificationTopic211862B9-iZhUklp0F1q7",
+    "Ec2ComputeConstructLaunchTemplateId9A549C5E": "lt-019ca2afbe5567fed",
+    "LambdaWorkflowTriggerFunctionName": "GSWorkflowBaseStack-LambdaWorkflowTriggerConstruct-CcLQvydz1HLg",
+    "DynamoDBTableName": "3dgs-ddb-table-o7vo1a",
+    "Region": "eu-west-2",
+    "SnsTopicArn": "arn:aws:sns:eu-west-2:762233765429:GSWorkflowBaseStack-NotificationConstructNotificationTopic211862B9-iZhUklp0F1q7",
+    "S3BucketName": "3dgs-bucket-o7vo1a",
+    "StateMachineName": "3dgs-sfn-o7vo1a",
+    "LambdaWorkflowCompleteFunctionName": "GSWorkflowBaseStack-LambdaWorkflowCompleteConstruc-jz8aScDJQjAJ",
+    "SfnArnSsmParameterName": "3dgs-sfn-arn-o7vo1a",
+    "S3ConstructLoggingBucketNameF302B248": "3dgs-bucket-o7vo1a-logs"
+  }
 }
