@@ -139,7 +139,7 @@ class GSWorkflowBaseStack(Stack):
                 'DDB_TABLE_NAME': self.ddb_table_name,
                 'SNS_TOPIC_ARN': sns.sns_topic.topic_arn
             },
-            reserved_concurrent_executions=100,
+            reserved_concurrent_executions=10,
             tracing=lambda_.Tracing.ACTIVE
         )
         CfnOutput(
@@ -168,7 +168,7 @@ class GSWorkflowBaseStack(Stack):
                 'ECR_IMAGE_URI': self.ecr.repository.repository_uri,
                 'CONTAINER_ROLE_NAME': self.container_role_name
                 },
-            reserved_concurrent_executions=100,
+            reserved_concurrent_executions=10,
             tracing=lambda_.Tracing.ACTIVE
         )
         CfnOutput(

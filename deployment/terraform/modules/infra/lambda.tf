@@ -39,7 +39,7 @@ resource "aws_lambda_function" "lambda_workflow_trigger" {
  role = aws_iam_role.lambda_role.arn
  handler = "workflow_trigger.lambda_handler"
  filename = "${path.module}/../../../../source/lambda/workflow_trigger/workflow_trigger.zip"
- reserved_concurrent_executions = 100
+ reserved_concurrent_executions = 10
 
  # Enable X-Ray tracing
  tracing_config {
@@ -67,7 +67,7 @@ resource "aws_lambda_function" "lambda_workflow_complete" {
  role = aws_iam_role.lambda_role.arn
  handler = "workflow_complete.lambda_handler"
  filename = "${path.module}/../../../../source/lambda/workflow_complete/workflow_complete.zip"
- reserved_concurrent_executions = 100
+ reserved_concurrent_executions = 5
 
  # Enable X-Ray tracing
  tracing_config {
