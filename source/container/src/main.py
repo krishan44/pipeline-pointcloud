@@ -337,6 +337,66 @@ def process_images(input_dir, output_dir=None):
             output_mask_path = os.path.join(output_dir, mask_file)
             alpha.save(output_mask_path)
 
+def resolve_input_file_path(dataset_path: str, filename: str, s3_input: str = ""):
+    """
+    Resolve the actual local input media path when SageMaker channel naming or
+    S3 prefix layouts differ from the configured DATASET_PATH/FILENAME.
+
+    Returns:
+        tuple[str, str]: (resolved_file_path, resolved_dataset_path)
+    """
+    normalized_filename = os.path.normpath(str(filename).strip())
+    file_basename = os.path.basename(normalized_filename)
+
+    # Highest-priority candidates in expected SageMaker channels
+    channel_roots = [
+        dataset_path,
+        "/opt/ml/input/data/training",
+        "/opt/ml/input/data/train"
+    ]
+
+    # Include basename-only checks to tolerate differing key/path conventions
+    candidate_paths = []
+    for root in channel_roots:
+        if not root:
+            continue
+        candidate_paths.append(os.path.join(root, normalized_filename))
+        candidate_paths.append(os.path.join(root, file_basename))
+
+    # If S3_INPUT points to a specific object key, use its basename as a candidate
+    if s3_input and s3_input.startswith("s3://"):
+        s3_object_name = os.path.basename(s3_input.rstrip("/"))
+        if s3_object_name:
+            for root in channel_roots:
+                if root:
+                    candidate_paths.append(os.path.join(root, s3_object_name))
+
+    for candidate in candidate_paths:
+        if os.path.isfile(candidate):
+            return candidate, os.path.dirname(candidate)
+
+    # Final fallback: recursive search in known SageMaker input roots
+    search_roots = ["/opt/ml/input/data", dataset_path]
+    extensions = {".zip", ".mp4", ".mov"}
+    prioritized_names = [normalized_filename, file_basename]
+
+    for root in search_roots:
+        if not root or not os.path.isdir(root):
+            continue
+        for current_root, _, files in os.walk(root):
+            for entry in files:
+                ext = os.path.splitext(entry)[1].lower()
+                if ext not in extensions:
+                    continue
+                full_path = os.path.join(current_root, entry)
+                if entry in prioritized_names or full_path.endswith(normalized_filename):
+                    return full_path, os.path.dirname(full_path)
+
+    raise FileNotFoundError(
+        f"Could not resolve input media '{filename}' in SageMaker input channels. "
+        f"Checked DATASET_PATH='{dataset_path}' and default channel paths."
+    )
+
 if __name__ == "__main__":
     ##################################
     # INITIALIZATION
@@ -385,6 +445,24 @@ if __name__ == "__main__":
     log.info(f"S3 Input Path: {config['S3_INPUT']}")
     log.info(f"S3 Output Path: {config['S3_OUTPUT']}")
 
+    # Resolve actual local media file path and correct dataset path if needed
+    try:
+        resolved_input_file_path, resolved_dataset_path = resolve_input_file_path(
+            config['DATASET_PATH'],
+            config['FILENAME'],
+            config['S3_INPUT']
+        )
+        if os.path.normpath(config['DATASET_PATH']) != os.path.normpath(resolved_dataset_path):
+            log.warning(
+                f"Configured DATASET_PATH {config['DATASET_PATH']} does not contain input media. "
+                f"Using resolved dataset path: {resolved_dataset_path}"
+            )
+            config['DATASET_PATH'] = resolved_dataset_path
+        config['FILENAME'] = os.path.basename(resolved_input_file_path)
+        log.info(f"Resolved input media path: {resolved_input_file_path}")
+    except Exception as e:
+        pipeline.report_error(705, f"Unable to locate input media file '{config['FILENAME']}': {e}")
+
     # Check if video or zip of images given
     VIDEO = validate_input_media(config['FILENAME'])
     log.info(f"Is Video?: {VIDEO}")
@@ -421,7 +499,7 @@ if __name__ == "__main__":
         config['MAX_NUM_IMAGES'] = str(int(config['MAX_NUM_IMAGES']))
 
     input_filename_extension = os.path.splitext(str(config['FILENAME']))[1]
-    input_file_path = os.path.join(config['DATASET_PATH'], config['FILENAME'])
+    input_file_path = resolved_input_file_path
     current_dir_path = os.path.dirname(os.path.realpath(__file__))
 
     # Store the full list of GPUs

@@ -28,7 +28,7 @@ s3_input_prefix = "media-input"
 
 s3_output_prefix = "workflow-output"
 media_filename = ""
-instance_type = "ml.g6e.4xlarge" 
+instance_type = "ml.g5.xlarge"
 
 """
 !!! Change the input parameters for each option below !!!

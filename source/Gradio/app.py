@@ -37,6 +37,9 @@ CONFIG = {
     'ALLOWED_FORMATS': ['.png', '.PNG', '.jpg', '.JPG', '.jpeg', '.JPEG', '.mp4', '.MP4', '.mov', '.MOV']
 }
 
+IMAGE_FORMATS = {'.png', '.jpg', '.jpeg'}
+VIDEO_FORMATS = {'.mp4', '.mov'}
+
 # If CDK outputs are available, prefer them over hard-coded defaults / env vars.
 try:
     outputs_path = Path(__file__).resolve().parents[2] / 'deployment' / 'cdk' / 'outputs.json'
@@ -103,6 +106,7 @@ class GaussianSplattingUI:
         if not files:
             return False, "No files uploaded"
         total_size = 0
+        file_exts = []
         for f in files:
             try:
                 local_path, orig_name = self._resolve_file(f)
@@ -117,8 +121,16 @@ class GaussianSplattingUI:
 
             # Check file extension using original filename when available
             ext = Path(orig_name).suffix.lower()
+            file_exts.append(ext)
             if ext not in CONFIG['ALLOWED_FORMATS']:
                 return False, f"File format {ext} not supported. Allowed: {', '.join(CONFIG['ALLOWED_FORMATS'])}"
+
+        has_images = any(ext in IMAGE_FORMATS for ext in file_exts)
+        has_videos = any(ext in VIDEO_FORMATS for ext in file_exts)
+        if has_images and has_videos:
+            return False, "Please upload either image(s) or one video, not a mixed set"
+        if has_videos and len(files) > 1:
+            return False, "Please upload only one video file (.mp4 or .mov)"
         
         # Check total size
         total_size_mb = total_size / (1024 * 1024)
@@ -130,18 +142,30 @@ class GaussianSplattingUI:
     def upload_to_s3(self, job_uuid, files):
         """Upload files to S3"""
         try:
-            uploaded_count = 0
-            for f in files:
-                local_path, orig_name = self._resolve_file(f)
-                s3_key = f"input/{job_uuid}/{orig_name}"
-                logger.info(f"Uploading {local_path} to s3://{CONFIG['S3_BUCKET']}/{s3_key}")
-                s3_client.upload_file(str(local_path), CONFIG['S3_BUCKET'], s3_key)
-                uploaded_count += 1
-            
-            return True, f"Successfully uploaded {uploaded_count} file(s) to S3"
+            resolved_files = [self._resolve_file(f) for f in files]
+            file_exts = [Path(orig_name).suffix.lower() for _, orig_name in resolved_files]
+            all_images = all(ext in IMAGE_FORMATS for ext in file_exts)
+
+            if all_images:
+                archive_name = "input_images.zip"
+                zip_path = self.upload_dir / f"{job_uuid}_{archive_name}"
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for local_path, orig_name in resolved_files:
+                        zf.write(str(local_path), arcname=orig_name)
+
+                s3_key = f"input/{job_uuid}/{archive_name}"
+                logger.info(f"Uploading {zip_path} to s3://{CONFIG['S3_BUCKET']}/{s3_key}")
+                s3_client.upload_file(str(zip_path), CONFIG['S3_BUCKET'], s3_key)
+                return True, f"Successfully uploaded image archive to S3", archive_name
+
+            local_path, orig_name = resolved_files[0]
+            s3_key = f"input/{job_uuid}/{orig_name}"
+            logger.info(f"Uploading {local_path} to s3://{CONFIG['S3_BUCKET']}/{s3_key}")
+            s3_client.upload_file(str(local_path), CONFIG['S3_BUCKET'], s3_key)
+            return True, "Successfully uploaded video file to S3", orig_name
         except Exception as e:
             logger.error(f"S3 upload failed: {str(e)}")
-            return False, f"S3 upload failed: {str(e)}"
+            return False, f"S3 upload failed: {str(e)}", None
 
     def _resolve_file(self, f):
         """Resolve different Gradio file input shapes to a local Path and original filename.
@@ -179,7 +203,7 @@ class GaussianSplattingUI:
     def submit_job(self, email, job_name, files, 
                    filter_blurry=True, run_sfm=True, sfm_software="glomap",
                    generate_splat=True, max_steps=30000, remove_background=False,
-                   spherical_camera=False, rotate_splat=True):
+                   spherical_camera=False, rotate_splat=True, instance_type="ml.g5.xlarge"):
         """Submit reconstruction job to Step Functions"""
         
         # Validate inputs
@@ -198,20 +222,20 @@ class GaussianSplattingUI:
         logger.info(f"Submitting job {job_uuid} for {email}")
         
         # Upload files to S3
-        success, upload_msg = self.upload_to_s3(job_uuid, files)
+        success, upload_msg, input_filename = self.upload_to_s3(job_uuid, files)
         if not success:
             return f"❌ Upload Failed: {upload_msg}"
         
         # Prepare Step Function input
-        _, input_filename = self._resolve_file(files[0])  # Use first file's original name as primary input
-        
         step_function_input = {
             "UUID": job_uuid,
             "EMAIL": email,
             "JOB_NAME": job_name,
+            "MODEL_INPUT": f"s3://{CONFIG['S3_BUCKET']}/models/models.tar.gz",
             "S3_INPUT": f"s3://{CONFIG['S3_BUCKET']}/input/{job_uuid}",
             "S3_OUTPUT": f"s3://{CONFIG['S3_BUCKET']}/output/{job_uuid}",
             "FILENAME": input_filename,
+            "INSTANCE_TYPE": instance_type,
             "FILTER_BLURRY_IMAGES": str(filter_blurry).lower(),
             "RUN_SFM": str(run_sfm).lower(),
             "SFM_SOFTWARE_NAME": sfm_software,
@@ -400,6 +424,21 @@ def create_gradio_interface():
                     
                     with gr.Row():
                         with gr.Column():
+                            instance_type = gr.Dropdown(
+                                choices=[
+                                    "ml.g5.xlarge",    # 1x A10G GPU - $1.41/hr
+                                    "ml.g5.2xlarge",   # 1x A10G GPU - $1.52/hr  
+                                    "ml.g5.4xlarge",   # 1x A10G GPU - $2.03/hr
+                                    "ml.g5.12xlarge",  # 4x A10G GPU - $7.09/hr
+                                    "ml.g6e.xlarge",   # 1x L4 GPU - $1.11/hr
+                                    "ml.g6e.2xlarge",  # 1x L4 GPU - $1.35/hr
+                                    "ml.g6e.4xlarge",  # 1x L4 GPU - $1.83/hr
+                                    "ml.p3.2xlarge",   # 1x V100 GPU - $3.83/hr
+                                ],
+                                value="ml.g5.xlarge",
+                                label="GPU Instance Type",
+                                info="Select compute instance - affects cost and speed"
+                            )
                             filter_blurry = gr.Checkbox(
                                 label="Filter Blurry Images",
                                 value=True,
@@ -458,7 +497,7 @@ def create_gradio_interface():
                     fn=ui.submit_job,
                     inputs=[email, job_name, uploaded_files, filter_blurry, run_sfm, 
                            sfm_software, generate_splat, max_steps, remove_background, 
-                           spherical_camera, rotate_splat],
+                           spherical_camera, rotate_splat, instance_type],
                     outputs=submission_output
                 )
             

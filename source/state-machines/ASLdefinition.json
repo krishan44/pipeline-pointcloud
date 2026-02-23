@@ -10,7 +10,7 @@
           "instanceCount": 1,
           "volumeSizeInGB": 100,
           "timeout": 86400,
-          "instanceType": "ml.p3.2xlarge",
+          "instanceType.$": "$.INSTANCE_TYPE",
           "ecrImageArn.$": "$.ECR_IMAGE_URI",
           "containerRoleArn.$": "$.CONTAINER_ROLE_ARN",
           "completeLambdaName.$": "$.LAMBDA_COMPLETE_NAME",
@@ -47,6 +47,16 @@
         },
         "RoleArn.$": "$.stateMachine.containerRoleArn",
         "InputDataConfig": [
+          {
+            "ChannelName": "model",
+            "DataSource": {
+              "S3DataSource": {
+                "S3DataType": "S3Prefix",
+                "S3Uri.$": "$.envVars.MODEL_INPUT",
+                "S3DataDistributionType": "FullyReplicated"
+              }
+            }
+          },
           {
             "ChannelName": "training",
             "DataSource": {

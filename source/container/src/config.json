@@ -1,5 +1,5 @@
 {
-    "DATASET_PATH": "/opt/ml/input/data/train",
+    "DATASET_PATH": "/opt/ml/input/data/training",
     "CODE_PATH": "/opt/ml/code",
     "LOCAL_DEBUG": "False",
     "LOG_VERBOSITY": "info",

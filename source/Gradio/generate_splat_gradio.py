@@ -31,13 +31,33 @@ import boto3.s3.transfer
 
 print(f"Gradio Version: {gr.__version__}")
 
+# Try to load configuration from CDK outputs
+def load_config_from_outputs():
+    """Load S3 bucket name from CDK outputs.json if available"""
+    try:
+        from pathlib import Path
+        outputs_path = Path(__file__).resolve().parents[2] / 'deployment' / 'cdk' / 'outputs.json'
+        if outputs_path.exists():
+            with outputs_path.open('r', encoding='utf-8') as f:
+                outputs_data = json.load(f)
+            if 'GSWorkflowBaseStack' in outputs_data:
+                bucket = outputs_data['GSWorkflowBaseStack'].get(
+                    'S3BucketName', 
+                    outputs_data['GSWorkflowBaseStack'].get('S3ConstructBucketName77DC70F6', '')
+                )
+                print(f"Auto-loaded S3 bucket from outputs.json: {bucket}")
+                return bucket
+    except Exception as e:
+        print(f"Could not load config from outputs.json: {e}")
+    return ""
+
 class SharedState:
     def __init__(self):
-        self.s3_bucket = ""
+        self.s3_bucket = load_config_from_outputs()  # Auto-load from CDK outputs
         self.s3_input = "workflow-input"
         self.s3_output = "workflow-output"
         self.media_input = "media-input"
-        self.instance = "ml.g5.4xlarge"
+        self.instance = "ml.g5.xlarge"
         self.sfm = "glomap"
         self.model = "splatfacto"
         self.faces = "[]"
@@ -568,13 +588,16 @@ def create_aws_configuration_tab():
                 instance = gr.Dropdown(
                     label="Instance Type",
                     choices=[
-                        "ml.g5.4xlarge",
-                        "ml.g5.8xlarge",
-                        #"ml.g5.12xlarge",
-                        "ml.g6e.4xlarge",
-                        "ml.g6e.8xlarge"],
-                        #"ml.g6e.12xlarge"],
-                    value="ml.g5.4xlarge"
+                        "ml.g5.xlarge",    # 1x A10G - Most cost-effective
+                        "ml.g5.2xlarge",   # 1x A10G - More CPU/RAM
+                        "ml.g5.4xlarge",   # 1x A10G - Even more resources
+                        "ml.g5.8xlarge",   # 1x A10G - Maximum CPU/RAM
+                        "ml.g5.12xlarge",  # 4x A10G - Multi-GPU
+                        "ml.g6e.xlarge",   # 1x L4 - Budget option
+                        "ml.g6e.2xlarge",  # 1x L4
+                        "ml.g6e.4xlarge",  # 1x L4
+                        "ml.g6e.8xlarge"], # 1x L4
+                    value="ml.g5.xlarge"  # Default to most cost-effective
                 )
 
                 def update_shared_state(bucket, input_prefix, output_prefix, media_prefix, inst):
