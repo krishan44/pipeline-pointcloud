@@ -3,3 +3,4 @@ botocore
 rich
 rich_argparse
 docker
+trimesh

@@ -43,6 +43,20 @@ VIDEO_FORMATS = {'.mp4', '.mov'}
 # If CDK outputs are available, prefer them over hard-coded defaults / env vars.
 try:
     outputs_path = Path(__file__).resolve().parents[2] / 'deployment' / 'cdk' / 'outputs.json'
+    env_update_path = Path(__file__).resolve().parents[2] / 'env-update.json'
+    has_explicit_ecr_image = False
+
+    # Prefer explicit image URI from deployment env update file when available.
+    if env_update_path.exists():
+        with env_update_path.open('r', encoding='utf-8') as f:
+            env_update_data = json.load(f)
+        variables = env_update_data.get('Variables', {}) if isinstance(env_update_data, dict) else {}
+        if isinstance(variables, dict):
+            updated_image_uri = variables.get('ECR_IMAGE_URI')
+            if updated_image_uri:
+                CONFIG['ECR_IMAGE_URI'] = updated_image_uri
+                has_explicit_ecr_image = True
+
     if outputs_path.exists():
         with outputs_path.open('r', encoding='utf-8') as f:
             outputs_data = json.load(f)
@@ -66,7 +80,7 @@ try:
                 CONFIG['STEP_FUNCTION_ARN'] = f"arn:aws:states:{CONFIG['REGION']}:{account}:stateMachine:{state_machine_name}"
 
             ecr_name = base.get('ECRRepoName')
-            if account and ecr_name:
+            if account and ecr_name and not has_explicit_ecr_image:
                 CONFIG['ECR_IMAGE_URI'] = f"{account}.dkr.ecr.{CONFIG['REGION']}.amazonaws.com/{ecr_name}:latest"
 
             # Role / lambda / sns
@@ -80,6 +94,8 @@ try:
 except Exception:
     # Non-fatal: fall back to env/defaults
     pass
+
+logger.info(f"Using ECR image for training jobs: {CONFIG['ECR_IMAGE_URI']}")
 
 class GaussianSplattingUI:
     """Manages the Gaussian Splatting reconstruction workflow"""

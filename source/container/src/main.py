@@ -75,7 +75,13 @@ import sys
 import time
 import json
 import math
-import torch
+import struct
+try:
+    import torch
+    NUM_GPUS_AVAILABLE = torch.cuda.device_count()
+except Exception:
+    torch = None
+    NUM_GPUS_AVAILABLE = 0
 import shutil
 import logging
 import zipfile
@@ -397,6 +403,19 @@ def resolve_input_file_path(dataset_path: str, filename: str, s3_input: str = ""
         f"Checked DATASET_PATH='{dataset_path}' and default channel paths."
     )
 
+def read_colmap_points3d_count(points3d_bin_path: str) -> int:
+    """Read the number of sparse points from COLMAP points3D.bin."""
+    if not os.path.isfile(points3d_bin_path):
+        return 0
+    try:
+        with open(points3d_bin_path, "rb") as f:
+            header = f.read(8)
+        if len(header) < 8:
+            return 0
+        return int(struct.unpack("<Q", header)[0])
+    except Exception:
+        return 0
+
 if __name__ == "__main__":
     ##################################
     # INITIALIZATION
@@ -425,7 +444,7 @@ if __name__ == "__main__":
             name="3DGS-Pipeline",
             uuid=config['UUID'],
             num_threads=str(multiprocessing.cpu_count()),
-            num_gpus=str(torch.cuda.device_count()),
+            num_gpus=str(NUM_GPUS_AVAILABLE),
             log_verbosity=config['LOG_VERBOSITY']
         )
         log = pipeline.session.log
@@ -436,7 +455,12 @@ if __name__ == "__main__":
     except Exception as e:
         error_message = f"""Required environment variables not set.
             Check that the payload has the required fields: {e}"""
-        pipeline.report_error(710, error_message)
+        # If pipeline wasn't successfully created, fall back to printing and exiting
+        if 'pipeline' in locals() and hasattr(pipeline, 'report_error'):
+            pipeline.report_error(710, error_message)
+        else:
+            print(error_message)
+            sys.exit(1)
 
     # Options and Defaults
     log.info(f"UUID: {config['UUID']}")
@@ -539,7 +563,7 @@ if __name__ == "__main__":
     else:
         log.info("DEBUG: Single GPU setup, no distributed training configuration needed")
     
-    GPU_MAX_IMAGES = 500 # est at 4k
+    GPU_MAX_IMAGES = 200 # est at 4k for ml.g5.xlarge
 
     ##################################
     # TRANSFORM COMPONENT:
@@ -1098,6 +1122,22 @@ if __name__ == "__main__":
             if str(config['ENABLE_MULTI_GPU']).lower() == "false" and \
                 str(config['MODEL']).lower() != "3dgut" and \
                 str(config['MODEL']).lower() != "3dgrt":
+                train_downscale_factor = "1"
+                actual_image_count = len([
+                    f for f in os.listdir(image_path)
+                    if f.lower().endswith((".jpg", ".jpeg", ".png"))
+                ])
+
+                if actual_image_count >= 250:
+                    train_downscale_factor = "4"
+                elif actual_image_count >= 120:
+                    train_downscale_factor = "2"
+
+                log.info(
+                    "Training memory profile: "
+                    f"actual_images={actual_image_count}, downscale_factor={train_downscale_factor}"
+                )
+
                 args = [
                     str(config['MODEL']).lower(),
                     "--timestamp", "train-stage-1",
@@ -1133,7 +1173,7 @@ if __name__ == "__main__":
                 args.extend([
                     data_model,
                     "--data", f"{config['DATASET_PATH']}",
-                    "--downscale-factor", "1",
+                    "--downscale-factor", train_downscale_factor,
                 ])
 
                 pipeline.create_component(
@@ -1519,39 +1559,114 @@ if __name__ == "__main__":
                         else:
                             # unzip archive of images into /images directory
                             temp_path = os.path.join(config['DATASET_PATH'], 'temp')
-                            with zipfile.ZipFile(input_file_path,"r") as zip_ref:
-                                zip_ref.extractall(temp_path)  # nosemgrep: dangerous-tarfile-extractall
-                            temp_dir_input = os.listdir(temp_path)[0]
-                            if os.path.isdir(os.path.join(temp_path, temp_dir_input)): # Archive has a directory
-                                log.info("Moving directory from {temp_path} to {temp_dir_input}")
-                                os.rename(
-                                    os.path.join(temp_path, temp_dir_input),
-                                    image_path
+                            zip_input_path = input_file_path
+                            if not os.path.isfile(zip_input_path):
+                                log.warning(
+                                    f"Input archive not found at {zip_input_path}. "
+                                    "Attempting to resolve from SageMaker input channels."
                                 )
-                            else: # Archive has files, not folder
-                                # Get all items in the source directory
-                                files = os.listdir(temp_path)
-                                # Move each item to the destination
-                                for filename in files:
-                                    source_path = os.path.join(temp_path, filename)
-                                    destination_path = os.path.join(image_path, filename)
-                                    # Move the file
-                                    shutil.move(source_path, destination_path)
-                            filenames = os.listdir(image_path)
-                            for filename in filenames:
-                                filepath = os.path.join(image_path, filename)
-                                logging.info(f"Resizing image: {filepath}")
-                                resize_to_4k(filepath)
-                            first_file_ext = os.path.splitext(filenames[0])[1]
-                            if first_file_ext == ".png" or \
-                                first_file_ext == ".jpeg" or first_file_ext == ".jpg":
-                                logging.info("Found images in archive.")
+                                zip_input_path, _ = resolve_input_file_path(
+                                    config['DATASET_PATH'],
+                                    config['FILENAME'],
+                                    config['S3_INPUT']
+                                )
+                                log.info(f"Resolved archive path for extraction: {zip_input_path}")
                             else:
+                                log.info(f"Using configured archive path for extraction: {zip_input_path}")
+
+                            # Ensure a clean extraction directory
+                            if os.path.isdir(temp_path):
+                                shutil.rmtree(temp_path)
+                            os.makedirs(temp_path, exist_ok=True)
+
+                            log.info(f"ZIP path being extracted: {zip_input_path}")
+                            log.info(f"ZIP exists on disk: {os.path.isfile(zip_input_path)}")
+
+                            with zipfile.ZipFile(zip_input_path,"r") as zip_ref:
+                                zip_members = [
+                                    name for name in zip_ref.namelist()
+                                    if not name.endswith("/")
+                                ]
+                                log.info(
+                                    f"Archive contains {len(zip_members)} file entries before extraction."
+                                )
+                                log.info(f"Archive member preview: {zip_members[:50]}")
+                                zip_ref.extractall(temp_path)  # nosemgrep: dangerous-tarfile-extractall
+
+                            # Collect image files recursively to support nested archive layouts
+                            supported_extensions = (".png", ".jpeg", ".jpg")
+                            extracted_images = []
+                            extracted_extensions = {}
+                            for root, _, files in os.walk(temp_path):
+                                for filename in files:
+                                    extension = os.path.splitext(filename)[1].lower()
+                                    extracted_extensions[extension] = extracted_extensions.get(extension, 0) + 1
+                                    if filename.lower().endswith(supported_extensions):
+                                        extracted_images.append(os.path.join(root, filename))
+
+                            log.info(
+                                f"Extracted file extension counts: {json.dumps(extracted_extensions, sort_keys=True)}"
+                            )
+                            if len(extracted_images) > 0:
+                                preview_images = sorted([os.path.relpath(path, temp_path) for path in extracted_images])[:20]
+                                log.info(
+                                    f"Detected {len(extracted_images)} supported images. "
+                                    f"Example entries: {preview_images}"
+                                )
+
+                            if len(extracted_images) == 0:
+                                preview_files = []
+                                for root, _, files in os.walk(temp_path):
+                                    for filename in files:
+                                        preview_files.append(os.path.relpath(os.path.join(root, filename), temp_path))
+                                        if len(preview_files) >= 50:
+                                            break
+                                    if len(preview_files) >= 50:
+                                        break
+                                log.error(
+                                    "No supported images found after extraction. "
+                                    f"Archive path: {zip_input_path}. "
+                                    f"First extracted files: {preview_files}"
+                                )
                                 pipeline.report_error(
                                     790,
                                     """The archive doesn't contain supported image files
                                     .jpg, .jpeg, or .png"""
                                 )
+
+                            # Ensure destination image directory only contains current input images
+                            for existing_item in os.listdir(image_path):
+                                existing_path = os.path.join(image_path, existing_item)
+                                if os.path.isdir(existing_path):
+                                    shutil.rmtree(existing_path)
+                                else:
+                                    os.remove(existing_path)
+
+                            # Move images to image_path, keeping names when possible
+                            for source_image_path in sorted(extracted_images):
+                                destination_name = os.path.basename(source_image_path)
+                                destination_path = os.path.join(image_path, destination_name)
+
+                                if os.path.exists(destination_path):
+                                    base_name, extension = os.path.splitext(destination_name)
+                                    suffix_index = 1
+                                    while os.path.exists(destination_path):
+                                        destination_name = f"{base_name}_{suffix_index}{extension}"
+                                        destination_path = os.path.join(image_path, destination_name)
+                                        suffix_index += 1
+
+                                shutil.move(source_image_path, destination_path)
+
+                            filenames = sorted([
+                                f for f in os.listdir(image_path)
+                                if f.lower().endswith(supported_extensions)
+                            ])
+                            for filename in filenames:
+                                filepath = os.path.join(image_path, filename)
+                                logging.info(f"Resizing image: {filepath}")
+                                resize_to_4k(filepath)
+
+                            logging.info(f"Found {len(filenames)} image files in archive.")
                 case "RemoveHumanSubject":
                     # REMOVE HUMAN SUBJECT CONDITIONAL COMPONENT
                     # Run Component
@@ -1608,6 +1723,61 @@ if __name__ == "__main__":
                     if (str(config['MODEL']).lower() != "3dgut" and str(config['MODEL']).lower() != "3dgrt"):
                         if (str(config['SFM_SOFTWARE_NAME']).lower() == "colmap" or \
                             str(config['SFM_SOFTWARE_NAME']).lower() == "glomap"):
+                            min_required_frames = 3
+                            min_required_points = 3
+                            splatfacto_models = {"splatfacto", "splatfacto-big", "splatfacto-mcmc", "splatfacto-w-light"}
+                            selected_model = str(config['MODEL']).lower()
+
+                            if selected_model in splatfacto_models:
+                                min_required_frames = 10
+                                min_required_points = 50
+
+                                source_images_count = len([
+                                    img_name for img_name in os.listdir(image_path)
+                                    if img_name.lower().endswith((".jpg", ".jpeg", ".png"))
+                                ])
+                                if source_images_count < min_required_frames:
+                                    pipeline.report_error(
+                                        770,
+                                        (
+                                            "Insufficient input images for splatfacto training. "
+                                            f"Found {source_images_count} images; need at least {min_required_frames}. "
+                                            "Use more overlapping frames/images (50-100+ recommended) "
+                                            "or switch to a non-splatfacto model for tiny datasets."
+                                        )
+                                    )
+
+                            frame_count = 0
+                            if os.path.isfile(transforms_out_path):
+                                try:
+                                    with open(transforms_out_path, "r", encoding="utf-8") as tf:
+                                        transforms_data = json.load(tf)
+                                    frame_count = len(transforms_data.get("frames", []))
+                                except Exception as e:
+                                    log.warning(f"Unable to parse transforms file {transforms_out_path}: {e}")
+                            else:
+                                log.warning(f"Transforms file not found before training: {transforms_out_path}")
+
+                            points3d_bin_path = os.path.join(sparse_path, "0", "points3D.bin")
+                            points_count = read_colmap_points3d_count(points3d_bin_path)
+
+                            log.info(
+                                f"SfM quality check before training: frames={frame_count}, "
+                                f"sparse_points={points_count}"
+                            )
+
+                            if frame_count < min_required_frames or points_count < min_required_points:
+                                pipeline.report_error(
+                                    770,
+                                    (
+                                        "Insufficient SfM reconstruction quality for training. "
+                                        f"Found frames={frame_count} (min {min_required_frames}) and "
+                                        f"sparse_points={points_count} (min {min_required_points}). "
+                                        "Try using sharper images with more overlap, disable aggressive "
+                                        "blurry-image/background filtering, or increase input frame count."
+                                    )
+                                )
+
                             # Move the sparse point cloud from sparse/0/* to colmap/sparse/*
                             log.info('Running Training...')
                             current_time = int(time.time())
@@ -1615,16 +1785,50 @@ if __name__ == "__main__":
                             log.info(f"Time for SfM: {sfm_time}s")
                             sparse_path_out = os.path.join(config['DATASET_PATH'], "colmap", "sparse")
                             shutil.move(sparse_path, sparse_path_out)
-                            
-                            # Set the image cache to disk if there are a lot of images to prevent OOM
-                            # Set the max number of thread workers to 1 to prevent dataloader worker_indices[] index out of range
-                            if str(config['MODEL']).lower() != "nerfacto":
-                                num_images = len(os.listdir(image_path))
-                                if num_images > GPU_MAX_IMAGES:
+
+                            # Recompute training memory profile at runtime after preprocessing/spherical expansion.
+                            actual_image_count = len([
+                                f for f in os.listdir(image_path)
+                                if f.lower().endswith((".jpg", ".jpeg", ".png"))
+                            ])
+                            runtime_downscale_factor = "1"
+                            if actual_image_count >= 250:
+                                runtime_downscale_factor = "4"
+                            elif actual_image_count >= 120:
+                                runtime_downscale_factor = "2"
+
+                            log.info(
+                                "Runtime training memory profile: "
+                                f"actual_images={actual_image_count}, "
+                                f"downscale_factor={runtime_downscale_factor}, "
+                                f"gpu_max_images={GPU_MAX_IMAGES}"
+                            )
+
+                            if "--downscale-factor" in component.args:
+                                downscale_index = component.args.index("--downscale-factor")
+                                if downscale_index + 1 < len(component.args):
+                                    component.args[downscale_index + 1] = runtime_downscale_factor
+
+                            # Force CPU image cache for large image counts to avoid GPU OOM.
+                            # Also cap datamanager workers to reduce worker index issues.
+                            if actual_image_count > GPU_MAX_IMAGES:
+                                if "--pipeline.datamanager.cache-images" in component.args:
+                                    cache_index = component.args.index("--pipeline.datamanager.cache-images")
+                                    if cache_index + 1 < len(component.args):
+                                        component.args[cache_index + 1] = "cpu"
+                                else:
                                     index = component.args.index("colmap")
                                     if index != -1:
-                                        component.args.insert(index, "disk")
+                                        component.args.insert(index, "cpu")
                                         component.args.insert(index, "--pipeline.datamanager.cache-images")
+
+                                if "--pipeline.datamanager.max-thread-workers" in component.args:
+                                    workers_index = component.args.index("--pipeline.datamanager.max-thread-workers")
+                                    if workers_index + 1 < len(component.args):
+                                        component.args[workers_index + 1] = "1"
+                                else:
+                                    index = component.args.index("colmap")
+                                    if index != -1:
                                         component.args.insert(index, "1")
                                         component.args.insert(index, "--pipeline.datamanager.max-thread-workers")
                     else:

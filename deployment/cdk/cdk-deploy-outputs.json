@@ -1,0 +1,24 @@
+{
+  "GSWorkflowBaseStack": {
+    "S3ConstructBucketName77DC70F6": "3dgs-bucket-o7vo1a",
+    "ECRRepoName": "3dgs-ecr-repo-o7vo1a",
+    "ContainerRoleArn": "arn:aws:iam::762233765429:role/3dgs-container-role-o7vo1a",
+    "SnsTopicName": "GSWorkflowBaseStack-NotificationConstructNotificationTopic211862B9-iZhUklp0F1q7",
+    "LambdaWorkflowTriggerFunctionName": "GSWorkflowBaseStack-LambdaWorkflowTriggerConstruct-CcLQvydz1HLg",
+    "DynamoDBTableName": "3dgs-ddb-table-o7vo1a",
+    "Region": "eu-west-2",
+    "SnsTopicArn": "arn:aws:sns:eu-west-2:762233765429:GSWorkflowBaseStack-NotificationConstructNotificationTopic211862B9-iZhUklp0F1q7",
+    "S3BucketName": "3dgs-bucket-o7vo1a",
+    "StateMachineName": "3dgs-sfn-o7vo1a",
+    "LambdaWorkflowCompleteFunctionName": "GSWorkflowBaseStack-LambdaWorkflowCompleteConstruc-jz8aScDJQjAJ",
+    "SfnArnSsmParameterName": "3dgs-sfn-arn-o7vo1a",
+    "S3ConstructLoggingBucketNameF302B248": "3dgs-bucket-o7vo1a-logs"
+  },
+  "GSWorkflowPostDeployStack": {
+    "ModelsArchiveLocation": "s3://3dgs-bucket-o7vo1a/models/models.tar.gz",
+    "ECRRepositoryName": "3dgs-ecr-repo-o7vo1a",
+    "ContainerDeploymentDockerImageUri89099063": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/cdk-hnb659fds-container-assets-762233765429-eu-west-2:859c45bba3fa4d1d92575f1eceade216c7e348acfd9e13145d1ef76d379012df",
+    "DeploymentBucketName": "3dgs-bucket-o7vo1a",
+    "ContainerDeploymentECRRepositoryUri33CFE539": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-o7vo1a"
+  }
+}

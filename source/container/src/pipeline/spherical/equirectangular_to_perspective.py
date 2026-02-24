@@ -910,7 +910,7 @@ if __name__ == '__main__':
             height, width = img.shape[:2]
             pers_dim = int(float(max(height, width))/4)
             if filenames is not None:
-                for filename in filenames:
+                for image_index, filename in enumerate(filenames, start=1):
                     base_name, extension = os.path.splitext(filename)
                     # if using opencv frame extraction, will be in format "frame_298_01520.png"
                     if base_name[:5].lower() == "frame":
@@ -921,7 +921,7 @@ if __name__ == '__main__':
                     if extension.lower() == ".jpeg" or \
                         extension.lower() == ".jpg" or \
                         extension.lower() == ".png":
-                        log.info(f"+++ Processing ERP image {str(int(img_num)+1)} of {str(len(filenames))} +++")
+                        log.info(f"+++ Processing ERP image {image_index} of {str(len(filenames))} +++")
                         orig_path = os.path.join(data_dir, f"{base_name}{extension}")
 
                         # Prepare images into separate sequential directories for
@@ -994,7 +994,29 @@ if __name__ == '__main__':
                         # Convert Cubemap to ERP
                         cube_dice = [cube_left, flip_cube_front, flip_cube_right, cube_back, flip_cube_up, cube_down]
                         try:
-                            erp_img = py360convert.c2e(cubemap=cube_dice, h=dims[0], w= dims[1], cube_format='list')
+                            target_h = dims[0]
+                            target_w = dims[1]
+                            conversion_w = target_w
+                            if target_w % 8 != 0:
+                                conversion_w = int(math.ceil(target_w / 8.0) * 8)
+                                log.warning(
+                                    f"Input ERP width {target_w} is not divisible by 8; "
+                                    f"using temporary width {conversion_w} for cubemap-to-ERP conversion."
+                                )
+
+                            erp_img = py360convert.c2e(
+                                cubemap=cube_dice,
+                                h=target_h,
+                                w=conversion_w,
+                                cube_format='list'
+                            )
+
+                            if conversion_w != target_w:
+                                erp_img = cv2.resize(
+                                    erp_img,
+                                    (target_w, target_h),
+                                    interpolation=cv2.INTER_AREA
+                                )
                         except Exception as e:
                             raise RuntimeError(f"An error occurred converting cubemap to ERP: {str(e)}") from e
 
