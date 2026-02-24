@@ -11,6 +11,7 @@ import boto3
 import logging
 import gradio as gr
 from datetime import datetime
+from botocore.exceptions import ClientError
 from pathlib import Path
 import zipfile
 import shutil
@@ -347,11 +348,12 @@ class GaussianSplattingUI:
                 key = obj['Key']
                 size = obj['Size']
                 filename = key.replace(prefix, '')
-                
+
                 # Skip empty folder markers
                 if filename and not filename.endswith('/'):
                     size_mb = size / (1024 * 1024)
-                    files.append(f"{filename} ({size_mb:.2f} MB)")
+                    # Include the S3 key so users can copy the exact path if needed
+                    files.append(f"{filename} ({size_mb:.2f} MB) — s3://{CONFIG['S3_BUCKET']}/{key}")
                     total_size += size
             
             if not files:
@@ -377,21 +379,104 @@ class GaussianSplattingUI:
             # Extract just the filename if it includes size info
             if ' (' in filename:
                 filename = filename.split(' (')[0]
-            
+            # Build S3 key flexibly to accept several user inputs and fall back to suffix-matching
+            filename = filename.strip().lstrip('/')
+
+            # Normalize input that may include the size text
+            if ' (' in filename:
+                filename = filename.split(' (')[0]
+
+            tried_keys = []
+
+            def _download_key(bucket, key):
+                download_path = Path('./downloads')
+                prefix = f"output/{job_uuid}/"
+                # Create a safe local path: if key is under the job prefix, preserve subfolders
+                if key.startswith(prefix):
+                    rel = key[len(prefix):]
+                    local_file = download_path / rel
+                else:
+                    # fallback to using only the filename portion
+                    local_file = download_path / Path(key).name
+
+                local_file.parent.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Downloading s3://{bucket}/{key} to {local_file}")
+                s3_client.download_file(bucket, key, str(local_file))
+                return str(local_file)
+
+            # If user provided a full key starting with 'output/', use it directly
+            if filename.startswith("output/"):
+                s3_key = filename
+                tried_keys.append(s3_key)
+                try:
+                    local = _download_key(CONFIG['S3_BUCKET'], s3_key)
+                    return local, f"✅ Downloaded: {Path(s3_key).name}"
+                except ClientError:
+                    # continue to fallback
+                    pass
+
+            # If user pasted a full s3:// URI, parse bucket and key
+            if filename.startswith("s3://"):
+                # strip scheme
+                rest = filename[5:]
+                parts = rest.split('/', 1)
+                if len(parts) == 2:
+                    bucket_name, obj_key = parts[0], parts[1]
+                    tried_keys.append(f"s3://{bucket_name}/{obj_key}")
+                    try:
+                        local = _download_key(bucket_name, obj_key)
+                        return local, f"✅ Downloaded: {Path(obj_key).name}"
+                    except ClientError:
+                        # fall through to other heuristics
+                        pass
+
+            # If user provided a path starting with the job UUID, prepend 'output/'
+            if filename.startswith(f"{job_uuid}/"):
+                s3_key = f"output/{filename}"
+                tried_keys.append(s3_key)
+                try:
+                    local = _download_key(CONFIG['S3_BUCKET'], s3_key)
+                    return local, f"✅ Downloaded: {Path(s3_key).name}"
+                except ClientError:
+                    pass
+
+            # Primary candidate: output/<job_uuid>/<filename>
             s3_key = f"output/{job_uuid}/{filename}"
-            download_path = Path('./downloads')
-            download_path.mkdir(exist_ok=True)
-            
-            local_file = download_path / filename
-            logger.info(f"Downloading {s3_key} to {local_file}")
-            
-            s3_client.download_file(CONFIG['S3_BUCKET'], s3_key, str(local_file))
-            
-            return str(local_file), f"✅ Downloaded: {filename}"
+            tried_keys.append(s3_key)
+            try:
+                local = _download_key(s3_key)
+                return local, f"✅ Downloaded: {Path(s3_key).name}"
+            except ClientError:
+                # Not found: try suffix-matching across objects under the job prefix
+                prefix = f"output/{job_uuid}/"
+                response = s3_client.list_objects_v2(Bucket=CONFIG['S3_BUCKET'], Prefix=prefix)
+                matches = []
+                if 'Contents' in response:
+                    for obj in response['Contents']:
+                        key = obj['Key']
+                        if key.endswith(filename):
+                            matches.append(key)
+
+                if len(matches) == 1:
+                    s3_key = matches[0]
+                    tried_keys.append(s3_key)
+                    try:
+                        local = _download_key(CONFIG['S3_BUCKET'], s3_key)
+                        return local, f"✅ Downloaded: {Path(s3_key).name} (resolved from nested path)"
+                    except ClientError as e:
+                        logger.error(f"Failed to download resolved key {s3_key}: {str(e)}")
+                        return None, f"❌ Download failed after resolving nested key: {str(e)}\nTried keys: {tried_keys}"
+                elif len(matches) > 1:
+                    # Multiple candidates found — show the options so user can pick the correct one
+                    pretty = '\n'.join([f"- s3://{CONFIG['S3_BUCKET']}/{k}" for k in matches])
+                    return None, (f"❌ Multiple files match '{filename}'. Please specify the full key or choose one of:\n{pretty}")
+                else:
+                    return None, f"❌ Download failed: object not found. Tried keys: {tried_keys}"
         
         except Exception as e:
-            logger.error(f"Failed to download result: {str(e)}")
-            return None, f"❌ Download failed: {str(e)}"
+            logger.error(f"Failed to download result for job {job_uuid} filename {filename}: {str(e)}")
+            # Help the user by suggesting the exact S3 key attempted
+            return None, f"❌ Download failed: {str(e)}\nTried S3 key: {s3_key}"
 
 # Initialize UI
 ui = GaussianSplattingUI()
