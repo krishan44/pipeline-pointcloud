@@ -416,6 +416,70 @@ def read_colmap_points3d_count(points3d_bin_path: str) -> int:
     except Exception:
         return 0
 
+def ensure_downscaled_images(images_dir: str, downscale_factor: str, log: logging.Logger) -> None:
+    """Pre-create downscaled image directory expected by Nerfstudio COLMAP dataparser.
+
+    This avoids interactive downscale prompts (Confirm.ask) in non-interactive
+    SageMaker jobs.
+    """
+    try:
+        factor = int(str(downscale_factor))
+    except (TypeError, ValueError):
+        factor = 1
+
+    if factor <= 1:
+        return
+    if not os.path.isdir(images_dir):
+        log.warning(f"Images directory not found for downscaling: {images_dir}")
+        return
+
+    parent_dir = os.path.dirname(images_dir)
+    target_dir = os.path.join(parent_dir, f"images_{factor}")
+    os.makedirs(target_dir, exist_ok=True)
+
+    image_files = sorted([
+        file_name for file_name in os.listdir(images_dir)
+        if file_name.lower().endswith((".jpg", ".jpeg", ".png"))
+    ])
+
+    if not image_files:
+        log.warning(f"No images found to downscale in {images_dir}")
+        return
+
+    existing_count = len([
+        file_name for file_name in os.listdir(target_dir)
+        if file_name.lower().endswith((".jpg", ".jpeg", ".png"))
+    ])
+    if existing_count == len(image_files):
+        log.info(
+            f"Downscaled directory already prepared: {target_dir} "
+            f"({existing_count} images, factor={factor})"
+        )
+        return
+
+    log.info(
+        f"Preparing downscaled images for non-interactive training: "
+        f"factor={factor}, source_count={len(image_files)}"
+    )
+
+    for file_name in image_files:
+        source_path = os.path.join(images_dir, file_name)
+        target_path = os.path.join(target_dir, file_name)
+
+        image = cv2.imread(source_path, cv2.IMREAD_UNCHANGED)
+        if image is None:
+            log.warning(f"Failed to read image for downscaling: {source_path}")
+            continue
+
+        height, width = image.shape[:2]
+        resized_width = max(1, int(width / factor))
+        resized_height = max(1, int(height / factor))
+        resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+        if not cv2.imwrite(target_path, resized):
+            log.warning(f"Failed to write downscaled image: {target_path}")
+
+    log.info(f"Prepared downscaled image directory: {target_dir}")
+
 if __name__ == "__main__":
     ##################################
     # INITIALIZATION
@@ -759,10 +823,16 @@ if __name__ == "__main__":
     ##################################
     try:
         if config['SPHERICAL_CAMERA'].lower() == "true":
+            spherical_use_oval_nodes = str(config.get('SPHERICAL_USE_OVAL_NODES', 'false'))
+            spherical_angled_up_views = str(config.get('SPHERICAL_ANGLED_UP_VIEWS', 'false'))
+            spherical_angled_down_views = str(config.get('SPHERICAL_ANGLED_DOWN_VIEWS', 'false'))
             # VIDEO TO IMAGES COMPONENT
             args = [
                 "-d", image_path,
                 "-ossfo", config['OPTIMIZE_SEQUENTIAL_SPHERICAL_FRAME_ORDER'],
+                "-oval", spherical_use_oval_nodes,
+                "-up", spherical_angled_up_views,
+                "-down", spherical_angled_down_views,
                 "-gpu", "true",
                 "-log", config['LOG_VERBOSITY']
             ]
@@ -1808,6 +1878,10 @@ if __name__ == "__main__":
                                 downscale_index = component.args.index("--downscale-factor")
                                 if downscale_index + 1 < len(component.args):
                                     component.args[downscale_index + 1] = runtime_downscale_factor
+
+                            # Pre-create downscaled images to avoid interactive
+                            # prompt paths in Nerfstudio dataparser on SageMaker.
+                            ensure_downscaled_images(image_path, runtime_downscale_factor, log)
 
                             # Force CPU image cache for large image counts to avoid GPU OOM.
                             # Also cap datamanager workers to reduce worker index issues.

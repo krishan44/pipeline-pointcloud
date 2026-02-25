@@ -220,7 +220,11 @@ class GaussianSplattingUI:
     def submit_job(self, email, job_name, files, 
                    filter_blurry=True, run_sfm=True, sfm_software="glomap",
                    generate_splat=True, max_steps=30000, remove_background=False,
-                   spherical_camera=False, rotate_splat=True, instance_type="ml.g5.xlarge"):
+                   spherical_camera=False, rotate_splat=True, instance_type="ml.g5.xlarge",
+                   optimize_sequential_spherical_frame_order=True,
+                   spherical_use_oval_nodes=False,
+                   spherical_angled_up_views=False,
+                   spherical_angled_down_views=False):
         """Submit reconstruction job to Step Functions"""
         
         # Validate inputs
@@ -260,6 +264,10 @@ class GaussianSplattingUI:
             "MAX_STEPS": str(int(max_steps)),
             "REMOVE_BACKGROUND": str(remove_background).lower(),
             "SPHERICAL_CAMERA": str(spherical_camera).lower(),
+            "OPTIMIZE_SEQUENTIAL_SPHERICAL_FRAME_ORDER": str(optimize_sequential_spherical_frame_order).lower(),
+            "SPHERICAL_USE_OVAL_NODES": str(spherical_use_oval_nodes).lower(),
+            "SPHERICAL_ANGLED_UP_VIEWS": str(spherical_angled_up_views).lower(),
+            "SPHERICAL_ANGLED_DOWN_VIEWS": str(spherical_angled_down_views).lower(),
             "ROTATE_SPLAT": str(rotate_splat).lower(),
             # Configuration passed to Step Function for SageMaker training job
             "ECR_IMAGE_URI": CONFIG['ECR_IMAGE_URI'],
@@ -566,10 +574,10 @@ def create_gradio_interface():
                             max_steps = gr.Slider(
                                 minimum=1000,
                                 maximum=100000,
-                                value=30000,
+                                value=1500,
                                 step=1000,
                                 label="Training Steps",
-                                info="More steps = better quality, longer training"
+                                info="1000-1500 for quick preview, higher for final quality"
                             )
                     
                     with gr.Row():
@@ -583,6 +591,26 @@ def create_gradio_interface():
                                 label="Spherical Camera Mode",
                                 value=False,
                                 info="For 360° panorama images - converts to 6 cube faces"
+                            )
+                            optimize_seq_spherical = gr.Checkbox(
+                                label="Optimize Spherical Sequence",
+                                value=True,
+                                info="Keeps view ordering optimized for SfM"
+                            )
+                            spherical_use_oval_nodes = gr.Checkbox(
+                                label="Spherical Oval Nodes",
+                                value=False,
+                                info="Adds extra node frames (can improve robustness, slower)"
+                            )
+                            spherical_angled_up_views = gr.Checkbox(
+                                label="Spherical Angled Up Views",
+                                value=False,
+                                info="Adds extra upward views (slower)"
+                            )
+                            spherical_angled_down_views = gr.Checkbox(
+                                label="Spherical Angled Down Views",
+                                value=False,
+                                info="Adds extra downward views (slower)"
                             )
                             rotate_splat = gr.Checkbox(
                                 label="Rotate Splat",
@@ -598,7 +626,9 @@ def create_gradio_interface():
                     fn=ui.submit_job,
                     inputs=[email, job_name, uploaded_files, filter_blurry, run_sfm, 
                            sfm_software, generate_splat, max_steps, remove_background, 
-                           spherical_camera, rotate_splat, instance_type],
+                              spherical_camera, rotate_splat, instance_type,
+                              optimize_seq_spherical, spherical_use_oval_nodes,
+                              spherical_angled_up_views, spherical_angled_down_views],
                     outputs=submission_output
                 )
             

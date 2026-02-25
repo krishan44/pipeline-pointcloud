@@ -805,7 +805,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '-oval', '--use_oval_nodes',
         required=False,
-        default='true',
+        default='false',
         action='store',
         help='Whether to use oval view node paths for better SfM convergence (default is "false")'
     )
@@ -813,7 +813,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '-down', '--angled_down_views',
         required=False,
-        default='true',
+        default='false',
         action='store',
         help='Whether to include additional perspective images angled slightly down (15° and 30°) (default is "false")'
     )
@@ -821,7 +821,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '-up', '--angled_up_views',
         required=False,
-        default='true',
+        default='false',
         action='store',
         help='Whether to include additional perspective images angled up (75° and 90°) (default is "false")'
     )
