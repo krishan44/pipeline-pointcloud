@@ -888,9 +888,27 @@ if __name__ == '__main__':
     try:
         # Check that input directory exists
         if os.path.isdir(data_dir):
-            # Get list of all files in data directory
-            filenames = os.listdir(data_dir)
-            filenames = sorted(filenames)
+            valid_extensions = {".jpeg", ".jpg", ".png"}
+
+            # Get list of valid input image files in data directory
+            filenames = sorted([
+                f for f in os.listdir(data_dir)
+                if os.path.isfile(os.path.join(data_dir, f))
+                and os.path.splitext(f)[1].lower() in valid_extensions
+            ])
+
+            if not filenames:
+                raise ValueError(
+                    "No valid input images found in data directory. "
+                    "Expected .jpg/.jpeg/.png files at the root of the extracted input."
+                )
+
+            frame_id_width = max(5, len(str(len(filenames))))
+            normalized_frame_ids = {
+                filename: f"{idx:0{frame_id_width}d}"
+                for idx, filename in enumerate(filenames, start=1)
+            }
+
             start_frame_filename = filenames[0]
             stop_frame_filename = filenames[-1]
             middle_frame_filename = filenames[int(math.ceil(len(filenames)//2))]
@@ -912,31 +930,23 @@ if __name__ == '__main__':
             if filenames is not None:
                 for image_index, filename in enumerate(filenames, start=1):
                     base_name, extension = os.path.splitext(filename)
-                    # if using opencv frame extraction, will be in format "frame_298_01520.png"
-                    if base_name[:5].lower() == "frame":
-                        img_num = base_name.split('_')[1] # only grab the new frame numbers
-                    else:
-                        # this will be case for no image processing like deblur
-                        img_num = os.path.basename(base_name)
-                    if extension.lower() == ".jpeg" or \
-                        extension.lower() == ".jpg" or \
-                        extension.lower() == ".png":
-                        log.info(f"+++ Processing ERP image {image_index} of {str(len(filenames))} +++")
-                        orig_path = os.path.join(data_dir, f"{base_name}{extension}")
+                    img_num = normalized_frame_ids[filename]
+                    log.info(f"+++ Processing ERP image {image_index} of {str(len(filenames))} +++")
+                    orig_path = os.path.join(data_dir, f"{base_name}{extension}")
 
-                        # Prepare images into separate sequential directories for
-                        # reordering based on neighboring faces
-                        new_dir = os.path.join(data_dir, img_num)
+                    # Prepare images into separate sequential directories for
+                    # reordering based on neighboring faces
+                    new_dir = os.path.join(data_dir, img_num)
 
-                        if not os.path.isdir(new_dir):
-                            os.mkdir(new_dir)
+                    if not os.path.isdir(new_dir):
+                        os.mkdir(new_dir)
 
-                        # Move input file to its own directory
-                        new_path = os.path.join(new_dir, f"{img_num}{extension}")
+                    # Move input file to its own directory
+                    new_path = os.path.join(new_dir, f"{img_num}{extension}")
 
-                        if not os.path.isfile(new_path):
-                            log.info(f"Moving {orig_path} to {new_path}")
-                            shutil.move(orig_path, new_path)
+                    if not os.path.isfile(new_path):
+                        log.info(f"Moving {orig_path} to {new_path}")
+                        shutil.move(orig_path, new_path)
 
                         # Read the Equirectangular to Cubemap projection
                         img = imread(new_path, pilmode='RGBA')
@@ -1212,7 +1222,12 @@ if __name__ == '__main__':
                                 log.warning(f"Error moving {src} to {dst}: {str(e)}")
                                 # Continue processing other files instead of failing completely
 
-                image_folders = os.listdir(data_dir)
+                image_folders = sorted([
+                    f for f in os.listdir(data_dir)
+                    if os.path.isdir(os.path.join(data_dir, f))
+                ])
+                if not image_folders:
+                    raise ValueError("No frame directories were generated from input images.")
                 view_num_len = len(image_folders[0])
 
                 # Only get subfolders in the view directory                # .../views/back
@@ -1242,41 +1257,43 @@ if __name__ == '__main__':
                     head_last_fn, tail = os.path.splitext(last_filename)
                     head_middle_fn, tail = os.path.splitext(middle_filename)
 
+                    def as_formatted_view_id(value, context_name):
+                        try:
+                            return f"{int(value):0{view_num_len}d}"
+                        except (TypeError, ValueError) as err:
+                            raise ValueError(
+                                f"Invalid frame identifier '{value}' for {context_name}. "
+                                "Input images must be readable and produce valid frame IDs."
+                            ) from err
+
                     first_view = os.path.basename(head_first_fn)
-                    first_view =  f"{int(first_view):0{view_num_len}d}"
+                    first_view = as_formatted_view_id(first_view, "first view")
                     log.info(f"First view: {first_view}")
 
                     last_view = os.path.basename(head_last_fn)
-                    last_view =  f"{int(last_view):0{view_num_len}d}"
+                    last_view = as_formatted_view_id(last_view, "last view")
                     log.info(f"Last view: {last_view}")
 
                     middle_view = os.path.basename(head_middle_fn)
-                    middle_view =  f"{int(middle_view):0{view_num_len}d}"
+                    middle_view = as_formatted_view_id(middle_view, "middle view")
                     log.info(f"Middle view: {middle_view}")
 
-                    # Get frame names for insertion distances
-                    def extract_frame_num(filename):
-                        base_name = os.path.splitext(filename)[0]
-                        if base_name.startswith("frame_"):
-                            return base_name.split('_')[1]
-                        return base_name
-
-                    frame_10_name = f"{int(extract_frame_num(frame_10_filename)):0{view_num_len}d}"
-                    frame_20_name = f"{int(extract_frame_num(frame_20_filename)):0{view_num_len}d}"
-                    frame_30_name = f"{int(extract_frame_num(frame_30_filename)):0{view_num_len}d}"
-                    frame_40_name = f"{int(extract_frame_num(frame_40_filename)):0{view_num_len}d}"
-                    frame_50_name = f"{int(extract_frame_num(frame_50_filename)):0{view_num_len}d}"
-                    frame_60_name = f"{int(extract_frame_num(frame_60_filename)):0{view_num_len}d}"
-                    frame_70_name = f"{int(extract_frame_num(frame_70_filename)):0{view_num_len}d}"
-                    frame_80_name = f"{int(extract_frame_num(frame_80_filename)):0{view_num_len}d}"
-                    frame_90_name = f"{int(extract_frame_num(frame_90_filename)):0{view_num_len}d}"
+                    frame_10_name = normalized_frame_ids[frame_10_filename]
+                    frame_20_name = normalized_frame_ids[frame_20_filename]
+                    frame_30_name = normalized_frame_ids[frame_30_filename]
+                    frame_40_name = normalized_frame_ids[frame_40_filename]
+                    frame_50_name = normalized_frame_ids[frame_50_filename]
+                    frame_60_name = normalized_frame_ids[frame_60_filename]
+                    frame_70_name = normalized_frame_ids[frame_70_filename]
+                    frame_80_name = normalized_frame_ids[frame_80_filename]
+                    frame_90_name = normalized_frame_ids[frame_90_filename]
 
                     # Calculate neighbor frames for oval view nodes
                     def get_neighbor_frames(target_idx, total_frames, view_num_len):
                         prev_idx = max(0, target_idx - 1)
                         next_idx = min(total_frames - 1, target_idx + 1)
-                        prev_name = f"{int(extract_frame_num(filenames[prev_idx])):0{view_num_len}d}"
-                        next_name = f"{int(extract_frame_num(filenames[next_idx])):0{view_num_len}d}"
+                        prev_name = normalized_frame_ids[filenames[prev_idx]]
+                        next_name = normalized_frame_ids[filenames[next_idx]]
                         return [prev_name, next_name]
 
                     # Store original file count for consistent insertion calculations
