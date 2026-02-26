@@ -1692,6 +1692,9 @@ if __name__ == "__main__":
                 (os.path.join(output_path, "floorplan.geojson"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.geojson"),
                 (os.path.join(output_path, "floorplan_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_metadata.json")
             ]
+            # Note: floorplan exports currently assume files are always produced.
+            # If floorplan generation becomes optional/unavailable in the future,
+            # add the same missing-file guard used by S3-Export-ObjectLayer-*.
             for local_path, s3_path in uploads:
                 args = ["s3", "cp", local_path, s3_path]
                 pipeline.create_component(
@@ -2212,6 +2215,18 @@ if __name__ == "__main__":
                     log.info(f"Successful pipeline result generation located at \
                             {config['S3_OUTPUT']}/{str(os.path.splitext(config['FILENAME'])[0]).lower()}.*")
                 case _: # Default case, run Component
+                    if component.command == "aws" and \
+                        len(component.args) >= 4 and \
+                        component.args[0] == "s3" and component.args[1] == "cp":
+                        local_source_path = component.args[2]
+                        if component.name.startswith("S3-Export-ObjectLayer-") and \
+                            not str(local_source_path).startswith("s3://") and \
+                            not os.path.isfile(local_source_path):
+                            log.warning(
+                                "Skipping optional object-layer export because source file is missing: "
+                                f"{local_source_path}"
+                            )
+                            continue
                     pipeline.run_component(i)
         pipeline.session.status = Status.STOP
         log.info(f"Pipeline status changed to {pipeline.session.status}")

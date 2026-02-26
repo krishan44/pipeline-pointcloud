@@ -292,7 +292,10 @@ def main() -> None:
     parser.add_argument("--max-height", type=float, default=2.8)
     args = parser.parse_args()
 
-    os.makedirs(os.path.dirname(args.geojson_out), exist_ok=True)
+    for output_path in (args.geojson_out, args.svg_out, args.meta_out):
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
     meta = {
         "status": "unavailable",
@@ -303,16 +306,27 @@ def main() -> None:
         "sam2_note": "Not projected from SAM2 masks in this release; geometry-pattern object layer from reconstructed points."
     }
 
+    scale = _load_scale(args.measurement)
+    if scale is not None:
+        meta["units"] = "meters"
+        meta["scale_factor_m_per_model_unit"] = float(scale)
+
+    floor_polygon = _load_floor_polygon(args.floorplan_geojson)
+
+    def _write_unavailable(reason: str) -> None:
+        meta["reason"] = reason
+        _write_geojson([], meta["units"], args.geojson_out)
+        _write_svg(floor_polygon, [], meta["units"], args.svg_out)
+        _write_meta(args.meta_out, meta)
+
     points = _load_points(args.ply)
     if points is None:
-        meta["reason"] = f"Missing or invalid PLY: {args.ply}"
-        _write_meta(args.meta_out, meta)
+        _write_unavailable(f"Missing or invalid PLY: {args.ply}")
         return
 
     floor = _fit_floor_plane(points)
     if floor is None:
-        meta["reason"] = "Could not detect floor plane"
-        _write_meta(args.meta_out, meta)
+        _write_unavailable("Could not detect floor plane")
         return
 
     n, d, threshold = floor
@@ -328,8 +342,7 @@ def main() -> None:
     object_points = points[non_floor & object_height_mask]
 
     if len(object_points) < 40:
-        meta["reason"] = "Too few object points above floor"
-        _write_meta(args.meta_out, meta)
+        _write_unavailable("Too few object points above floor")
         return
 
     center = points.mean(axis=0)
@@ -337,7 +350,6 @@ def main() -> None:
     rel = object_points - center
     uv = np.column_stack((rel @ axis_u, rel @ axis_v))
 
-    scale = _load_scale(args.measurement)
     units = "meters" if scale is not None else "model_units"
 
     if scale is not None:
@@ -352,8 +364,6 @@ def main() -> None:
         min_area_units2=min_area,
         scale_m_per_unit=None
     )
-
-    floor_polygon = _load_floor_polygon(args.floorplan_geojson)
 
     _write_geojson(polygons, units, args.geojson_out)
     _write_svg(floor_polygon, polygons, units, args.svg_out)
