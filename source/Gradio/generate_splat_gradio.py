@@ -80,6 +80,8 @@ class SharedState:
         self.pose_world_to_cam = "true"
         self.log_verbosity = "info"
         self.mask_threshold = 0.6
+        self.measure_reference_type = "none"
+        self.tripod_height_m = 0.0
         self.model_3d = None
         self.rotate_splat = "true"
 
@@ -251,7 +253,8 @@ def preview_json(s3_bucket_name, s3_input_prefix, s3_output_prefix, video_file,
                 instance_type, sfm_software, training_model, cube_faces_remove, optimize_sequential, bg_removal_model,
                 filter_blurry, max_images, sfm_enable, enhanced_feature, matching_method, use_colmap_model,
                 use_transform_json, training_enable, max_steps, enable_multi_gpu, spherical_enable, remove_bg, remove_human,
-                source_coordinate, pose_world_to_cam, log_verbosity, mask_threshold, rotate_splat):
+                source_coordinate, pose_world_to_cam, log_verbosity, mask_threshold, rotate_splat,
+                measure_reference_type, tripod_height_m):
     unique_uuid = uuid.uuid4()
     original_filename = os.path.basename(video_file) if video_file else "No file selected"
     
@@ -309,6 +312,10 @@ def preview_json(s3_bucket_name, s3_input_prefix, s3_output_prefix, video_file,
             "backgroundRemovalModel": bg_removal_model,
             "maskThreshold": str(mask_threshold),
             "removeHumanSubject": remove_human == "true"
+        },
+        "measurement": {
+            "referenceType": measure_reference_type,
+            "tripodHeightM": str(tripod_height_m)
         }
     }
     
@@ -320,7 +327,8 @@ def generate_splat(s3_bucket_name, s3_input_prefix, s3_output_prefix, file_obj,
                   sfm_enable, enhanced_feature, matching_method, use_colmap_model,
                   use_transform_json, training_enable, max_steps, enable_multi_gpu, 
                   spherical_enable, remove_bg, remove_human, source_coordinate, 
-                  pose_world_to_cam, log_verbosity, mask_threshold, media_input_prefix="media-input", rotate_splat="babylon"):
+                  pose_world_to_cam, log_verbosity, mask_threshold, measure_reference_type="none",
+                  tripod_height_m=0.0, media_input_prefix="media-input", rotate_splat="babylon"):
     try:
         session = boto3.Session()
         s3 = session.client('s3')
@@ -353,6 +361,8 @@ def generate_splat(s3_bucket_name, s3_input_prefix, s3_output_prefix, file_obj,
         pose_world_to_cam = getattr(pose_world_to_cam, 'value', pose_world_to_cam)
         log_verbosity = getattr(log_verbosity, 'value', log_verbosity)
         mask_threshold = getattr(mask_threshold, 'value', mask_threshold)
+        measure_reference_type = getattr(measure_reference_type, 'value', measure_reference_type)
+        tripod_height_m = getattr(tripod_height_m, 'value', tripod_height_m)
         media_input_prefix = getattr(media_input_prefix, 'value', media_input_prefix)
         rotate_splat = getattr(rotate_splat, 'value', rotate_splat)
 
@@ -417,6 +427,10 @@ def generate_splat(s3_bucket_name, s3_input_prefix, s3_output_prefix, file_obj,
                 "backgroundRemovalModel": bg_removal_model,
                 "maskThreshold": str(mask_threshold),
                 "removeHumanSubject": remove_human == "true"
+            },
+            "measurement": {
+                "referenceType": str(measure_reference_type),
+                "tripodHeightM": str(tripod_height_m)
             }
         }
 
@@ -551,6 +565,10 @@ def create_upload_aws_tab():
                                 "backgroundRemovalModel": shared_state.bg_model,
                                 "maskThreshold": str(shared_state.mask_threshold),
                                 "removeHumanSubject": shared_state.remove_human == "true"
+                            },
+                            "measurement": {
+                                "referenceType": shared_state.measure_reference_type,
+                                "tripodHeightM": str(shared_state.tripod_height_m)
                             }
                         }
                         
@@ -625,6 +643,17 @@ def create_advanced_settings_tab():
                     label="Log Verbosity",
                     choices=["info", "warning", "error"],
                     value="info"
+                )
+                measure_reference_type = gr.Dropdown(
+                    label="Measurement Reference",
+                    choices=["none", "tripod_height"],
+                    value="none"
+                )
+                tripod_height_m = gr.Number(
+                    label="Tripod Height (m)",
+                    value=0.0,
+                    minimum=0.0,
+                    maximum=5.0
                 )
         with gr.Row():
             with gr.Column():
@@ -786,7 +815,8 @@ def create_advanced_settings_tab():
                      shared_state.remove_bg, shared_state.remove_human,
                      shared_state.source_coordinate, shared_state.pose_world_to_cam,
                      shared_state.log_verbosity, shared_state.mask_threshold,
-                     shared_state.rotate_splat) = args
+                     shared_state.rotate_splat,
+                     shared_state.measure_reference_type, shared_state.tripod_height_m) = args
                     return "Advanced settings updated"
 
                 # Get all advanced settings components after they're defined
@@ -797,7 +827,8 @@ def create_advanced_settings_tab():
                     max_steps, #enable_multi_gpu,
                     spherical_enable, remove_bg,
                     remove_human, source_coordinate, pose_world_to_cam,
-                    log_verbosity, mask_threshold, rotate_splat
+                    log_verbosity, mask_threshold, rotate_splat,
+                    measure_reference_type, tripod_height_m
                 ]
 
                 # Update shared state when any value changes
@@ -1732,7 +1763,9 @@ def create_debug_tab():
                         shared_state.pose_world_to_cam,
                         shared_state.log_verbosity,
                         shared_state.mask_threshold,
-                        shared_state.rotate_splat
+                        shared_state.rotate_splat,
+                        shared_state.measure_reference_type,
+                        shared_state.tripod_height_m
                     )
 
             preview_btn.click(

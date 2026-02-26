@@ -170,6 +170,9 @@ def lambda_handler(event, context):
                 # entry doesn't exist, create new entry
                 current_date = datetime.now()
                 datestamp = str(current_date.isoformat())
+                measurement_config = json_content.get("measurement", {})
+                measure_reference_type = str(measurement_config.get("referenceType", "none"))
+                tripod_height_m = str(measurement_config.get("tripodHeightM", "0.0"))
 
                 item = {
                     'uuid':  json_content["uuid"],
@@ -195,6 +198,8 @@ def lambda_handler(event, context):
                     "maxSteps": str(json_content["training"]["maxSteps"]),
                     "enableMultiGpu": str(json_content["training"]["enableMultiGpu"]),
                     "rotateSplat": str(json_content["training"]["rotateSplat"]),
+                    "measureReferenceType": measure_reference_type,
+                    "tripodHeightM": tripod_height_m,
                     "sphericalCamera": str(json_content["sphericalCamera"]["enable"]),
                     "sphericalCubeFacesToRemove": str(json_content["sphericalCamera"]["cubeFacesToRemove"]),
                     "optimizeSequentialSphericalFrameOrder": str(json_content["sphericalCamera"]["optimizeSequentialFrameOrder"]),
@@ -253,6 +258,8 @@ def lambda_handler(event, context):
                     "MAX_STEPS": str(json_content["training"]["maxSteps"]),
                     "ENABLE_MULTI_GPU": str(json_content["training"]["enableMultiGpu"]),
                     "ROTATE_SPLAT": str(json_content["training"]["rotateSplat"]),
+                    "MEASURE_REFERENCE_TYPE": str(json_content.get("measurement", {}).get("referenceType", "none")),
+                    "TRIPOD_HEIGHT_M": str(json_content.get("measurement", {}).get("tripodHeightM", "0.0")),
                     "SPHERICAL_CAMERA": str(json_content["sphericalCamera"]["enable"]),
                     "SPHERICAL_CUBE_FACES_TO_REMOVE": str(json_content["sphericalCamera"]["cubeFacesToRemove"]),
                     "OPTIMIZE_SEQUENTIAL_SPHERICAL_FRAME_ORDER": str(json_content["sphericalCamera"]["optimizeSequentialFrameOrder"]),

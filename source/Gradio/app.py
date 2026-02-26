@@ -224,7 +224,9 @@ class GaussianSplattingUI:
                    optimize_sequential_spherical_frame_order=True,
                    spherical_use_oval_nodes=False,
                    spherical_angled_up_views=False,
-                   spherical_angled_down_views=False):
+                   spherical_angled_down_views=False,
+                   use_tripod_scale=False,
+                   tripod_height_m=1.6):
         """Submit reconstruction job to Step Functions"""
         
         # Validate inputs
@@ -248,6 +250,13 @@ class GaussianSplattingUI:
             return f"❌ Upload Failed: {upload_msg}"
         
         # Prepare Step Function input
+        resolved_tripod_height = 0.0
+        if use_tripod_scale:
+            try:
+                resolved_tripod_height = float(tripod_height_m)
+            except (TypeError, ValueError):
+                resolved_tripod_height = 0.0
+
         step_function_input = {
             "UUID": job_uuid,
             "EMAIL": email,
@@ -269,6 +278,8 @@ class GaussianSplattingUI:
             "SPHERICAL_ANGLED_UP_VIEWS": str(spherical_angled_up_views).lower(),
             "SPHERICAL_ANGLED_DOWN_VIEWS": str(spherical_angled_down_views).lower(),
             "ROTATE_SPLAT": str(rotate_splat).lower(),
+            "MEASURE_REFERENCE_TYPE": "tripod_height" if use_tripod_scale else "none",
+            "TRIPOD_HEIGHT_M": str(resolved_tripod_height if use_tripod_scale else 0.0),
             # Configuration passed to Step Function for SageMaker training job
             "ECR_IMAGE_URI": CONFIG['ECR_IMAGE_URI'],
             "CONTAINER_ROLE_ARN": CONFIG['CONTAINER_ROLE_ARN'],
@@ -617,6 +628,17 @@ def create_gradio_interface():
                                 value=True,
                                 info="Align splat to standard orientation"
                             )
+                            use_tripod_scale = gr.Checkbox(
+                                label="Use Tripod Height for Scale",
+                                value=False,
+                                info="Estimate metric scale from camera height above floor"
+                            )
+                            tripod_height_m = gr.Number(
+                                label="Tripod Height (m)",
+                                value=1.60,
+                                precision=3,
+                                info="Measure floor to camera optical center (meters)"
+                            )
                 
                 submit_btn = gr.Button("🚀 Submit Reconstruction Job", size="lg", variant="primary")
                 
@@ -628,7 +650,8 @@ def create_gradio_interface():
                            sfm_software, generate_splat, max_steps, remove_background, 
                               spherical_camera, rotate_splat, instance_type,
                               optimize_seq_spherical, spherical_use_oval_nodes,
-                              spherical_angled_up_views, spherical_angled_down_views],
+                              spherical_angled_up_views, spherical_angled_down_views,
+                              use_tripod_scale, tripod_height_m],
                     outputs=submission_output
                 )
             

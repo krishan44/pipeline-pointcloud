@@ -22,6 +22,8 @@
     "MAX_STEPS": "30000",
     "ENABLE_MULTI_GPU": "False",
     "ROTATE_SPLAT": "True",
+    "MEASURE_REFERENCE_TYPE": "none",
+    "TRIPOD_HEIGHT_M": "0.0",
     "SPHERICAL_CAMERA": "False",
     "SPHERICAL_CUBE_FACES_TO_REMOVE": "",
     "SPHERICAL_USE_OVAL_NODES": "False",

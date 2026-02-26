@@ -532,6 +532,22 @@ if __name__ == "__main__":
     log.info(f"Filename: {config['FILENAME']}")
     log.info(f"S3 Input Path: {config['S3_INPUT']}")
     log.info(f"S3 Output Path: {config['S3_OUTPUT']}")
+    log.info(f"Measurement Reference Type: {config.get('MEASURE_REFERENCE_TYPE', 'none')}")
+    log.info(f"Tripod Height (m): {config.get('TRIPOD_HEIGHT_M', '0.0')}")
+
+    try:
+        tripod_height = float(str(config.get('TRIPOD_HEIGHT_M', '0.0')).strip())
+    except Exception:
+        tripod_height = 0.0
+        log.warning(
+            f"Invalid TRIPOD_HEIGHT_M='{config.get('TRIPOD_HEIGHT_M')}'. "
+            "Falling back to 0.0 and skipping tripod-based scaling."
+        )
+
+    use_tripod_scale = (
+        str(config.get('MEASURE_REFERENCE_TYPE', 'none')).lower() == 'tripod_height'
+        and tripod_height > 0.0
+    )
 
     # Resolve actual local media file path and correct dataset path if needed
     try:
@@ -1534,6 +1550,58 @@ if __name__ == "__main__":
     except Exception as e:
         error_message = f"Issue mirroring splat after SPZ conversion: {e}"
         pipeline.report_error(785, error_message)
+
+    ##################################
+    # TRANSFORM COMPONENT:
+    # Estimate metric scale from tripod height and output measurement JSON
+    ##################################
+    try:
+        if config['GENERATE_SPLAT'].lower() == "true" and \
+            str(config['MODEL']).lower() != "nerfacto" and use_tripod_scale:
+            measurement_json_path = os.path.join(output_path, "measurement_scale.json")
+            args = [
+                "--ply", os.path.join(output_path, "splat.ply"),
+                "--transforms", transforms_out_path,
+                "--tripod-height-m", str(tripod_height),
+                "--out", measurement_json_path
+            ]
+            pipeline.create_component(
+                name="Estimate-Scale-From-Tripod",
+                comp_type=ComponentType.transform,
+                comp_environ=ComponentEnvironment.python,
+                command="post_processing/estimate_scale_from_tripod.py",
+                args=args,
+                cwd=current_dir_path,
+                requires_gpu=False
+            )
+    except Exception as e:
+        error_message = f"Issue estimating scale from tripod height: {e}"
+        pipeline.report_error(786, error_message)
+
+    ##################################
+    # EXPORT COMPONENT:
+    # Export measurement JSON to S3
+    ##################################
+    try:
+        if config['GENERATE_SPLAT'].lower() == "true" and \
+            str(config['MODEL']).lower() != "nerfacto" and use_tripod_scale:
+            args = [
+                "s3", "cp",
+                os.path.join(output_path, "measurement_scale.json"),
+                f"{config['S3_OUTPUT']}/{config['UUID']}/{str(os.path.splitext(config['FILENAME'])[0]).lower()}_measurement_scale.json"
+            ]
+            pipeline.create_component(
+                name="S3-Export-Measurement",
+                comp_type=ComponentType.exporter,
+                comp_environ=ComponentEnvironment.executable,
+                command="aws",
+                args=args,
+                cwd=current_dir_path,
+                requires_gpu=False
+            )
+    except Exception as e:
+        error_message = f"Issue uploading measurement scale JSON to S3: {e}"
+        pipeline.report_error(786, error_message)
 
     ##################################
     # EXPORT COMPONENT:

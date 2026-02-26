@@ -20,5 +20,11 @@
     "ContainerDeploymentDockerImageUri89099063": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/cdk-hnb659fds-container-assets-762233765429-eu-west-2:06b8d861e524343d15c014de0c6c4cdd185d695803f16fa3b60ad03da1605603",
     "DeploymentBucketName": "3dgs-bucket-o7vo1a",
     "ContainerDeploymentECRRepositoryUri33CFE539": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-o7vo1a"
+  },
+  "MeasurementDefaults": {
+    "MeasureReferenceType": "tripod_height",
+    "TripodHeightM": "1.6",
+    "OutputArtifactSuffix": "_measurement_scale.json",
+    "Description": "Tripod height based metric scale estimation for generated PLY outputs"
   }
 }
