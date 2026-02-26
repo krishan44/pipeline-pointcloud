@@ -1726,6 +1726,12 @@ if __name__ == "__main__":
                 (os.path.join(output_path, "floorplan_objects_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_objects_metadata.json")
             ]
             for local_path, s3_path in uploads:
+                if not os.path.isfile(local_path):
+                    log.warning(
+                        "Skipping object-layer S3 export because local artifact is missing: %s",
+                        local_path
+                    )
+                    continue
                 args = ["s3", "cp", local_path, s3_path]
                 pipeline.create_component(
                     name=f"S3-Export-ObjectLayer-{os.path.basename(local_path)}",
