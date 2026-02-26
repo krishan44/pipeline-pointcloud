@@ -40,6 +40,7 @@ CONFIG = {
 
 IMAGE_FORMATS = {'.png', '.jpg', '.jpeg'}
 VIDEO_FORMATS = {'.mp4', '.mov'}
+ALLOWED_FORMATS_SET = {ext.lower() for ext in CONFIG['ALLOWED_FORMATS']}
 
 # If CDK outputs are available, prefer them over hard-coded defaults / env vars.
 try:
@@ -104,6 +105,8 @@ class GaussianSplattingUI:
     def __init__(self):
         self.upload_dir = Path('./uploads')
         self.upload_dir.mkdir(exist_ok=True)
+        # Ephemeral in-process history only. This is not persisted across
+        # restarts or shared across multiple workers.
         self.job_history = []
         
     def validate_inputs(self, email, job_name):
@@ -139,7 +142,7 @@ class GaussianSplattingUI:
             # Check file extension using original filename when available
             ext = Path(orig_name).suffix.lower()
             file_exts.append(ext)
-            if ext not in CONFIG['ALLOWED_FORMATS']:
+            if ext not in ALLOWED_FORMATS_SET:
                 return False, f"File format {ext} not supported. Allowed: {', '.join(CONFIG['ALLOWED_FORMATS'])}"
 
         has_images = any(ext in IMAGE_FORMATS for ext in file_exts)
@@ -394,6 +397,7 @@ class GaussianSplattingUI:
     def download_job_result(self, job_uuid, filename):
         """Download a specific result file from S3"""
         try:
+            s3_key = None
             if not job_uuid.strip() or not filename.strip():
                 return None, "❌ Please enter both Job UUID and filename"
             
@@ -465,7 +469,7 @@ class GaussianSplattingUI:
             s3_key = f"output/{job_uuid}/{filename}"
             tried_keys.append(s3_key)
             try:
-                local = _download_key(s3_key)
+                local = _download_key(CONFIG['S3_BUCKET'], s3_key)
                 return local, f"✅ Downloaded: {Path(s3_key).name}"
             except ClientError:
                 # Not found: try suffix-matching across objects under the job prefix
@@ -497,7 +501,7 @@ class GaussianSplattingUI:
         except Exception as e:
             logger.error(f"Failed to download result for job {job_uuid} filename {filename}: {str(e)}")
             # Help the user by suggesting the exact S3 key attempted
-            return None, f"❌ Download failed: {str(e)}\nTried S3 key: {s3_key}"
+            return None, f"❌ Download failed: {str(e)}\nTried S3 key: {s3_key or 'unknown'}"
 
 # Initialize UI
 ui = GaussianSplattingUI()

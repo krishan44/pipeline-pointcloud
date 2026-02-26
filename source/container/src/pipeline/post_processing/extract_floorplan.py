@@ -55,8 +55,12 @@ def _plane_from_points(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> Option
     return n, d
 
 
-def _fit_floor_plane(points: np.ndarray, max_iters: int = 700) -> Optional[Tuple[np.ndarray, float, np.ndarray, float]]:
-    if len(points) < 400:
+def _fit_floor_plane(
+    points: np.ndarray,
+    min_vertical_axis_component: float,
+    max_iters: int = 700
+) -> Optional[Tuple[np.ndarray, float, np.ndarray, float, float]]:
+    if len(points) < 50:
         return None
 
     bbox_min = points.min(axis=0)
@@ -77,12 +81,16 @@ def _fit_floor_plane(points: np.ndarray, max_iters: int = 700) -> Optional[Tuple
             continue
         n, d = plane
 
+        dominant_axis_component = float(np.max(np.abs(n)))
+        if dominant_axis_component < float(min_vertical_axis_component):
+            continue
+
         distances = np.abs(points @ n + d)
         inliers = distances < threshold
         count = int(np.sum(inliers))
-        if count > best_count and count >= 200:
+        if count > best_count and count >= 20:
             best_count = count
-            best = (n, d, inliers, threshold)
+            best = (n, d, inliers, threshold, dominant_axis_component)
 
     return best
 
@@ -99,7 +107,7 @@ def _make_plane_basis(n: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _points_to_polygon(points_2d: np.ndarray) -> Optional[np.ndarray]:
-    if len(points_2d) < 30:
+    if len(points_2d) < 5:
         return None
 
     mins = points_2d.min(axis=0)
@@ -151,6 +159,7 @@ def _points_to_polygon(points_2d: np.ndarray) -> Optional[np.ndarray]:
 
 
 def _polygon_to_svg(points: np.ndarray, out_path: str, units_label: str) -> None:
+    """Render a floorplan polygon as a rich SVG with wall-length annotations and a scale bar."""
     if len(points) < 3:
         return
 
@@ -158,29 +167,147 @@ def _polygon_to_svg(points: np.ndarray, out_path: str, units_label: str) -> None
     maxs = points.max(axis=0)
     size = np.maximum(maxs - mins, 1e-6)
 
-    margin = 20.0
-    view_w = float(size[0] + 2 * margin)
-    view_h = float(size[1] + 2 * margin)
+    # Margins: left/bottom for annotations, top/right for breathing room.
+    margin_l = 60.0
+    margin_b = 60.0
+    margin_t = 30.0
+    margin_r = 30.0
 
-    normalized = points - mins + margin
+    view_w = float(size[0]) + margin_l + margin_r
+    view_h = float(size[1]) + margin_t + margin_b
 
-    coords = []
-    for x, y in normalized:
-        svg_y = view_h - y
-        coords.append(f"{x:.4f},{svg_y:.4f}")
-    path_data = " ".join(coords)
+    # Coordinate helpers (SVG y-axis is flipped)
+    def to_svg(p):
+        x = (p[0] - mins[0]) + margin_l
+        y = view_h - ((p[1] - mins[1]) + margin_b)
+        return x, y
 
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w:.4f} {view_h:.4f}">\n'
-        f'  <g fill="none" stroke="#1f6feb" stroke-width="0.05">\n'
-        f'    <polygon points="{path_data}" fill="#58a6ff22" />\n'
-        f'  </g>\n'
-        f'  <text x="6" y="16" font-size="12" fill="#24292f">Units: {units_label}</text>\n'
-        f'</svg>\n'
-    )
+    # Build polygon points string
+    svg_pts = [to_svg(p) for p in points]
+    coords_str = " ".join(f"{x:.3f},{y:.3f}" for x, y in svg_pts)
+
+    # font_sz must be computed before wall-label loop (label suppression depends on it)
+    font_sz = max(4.0, min(view_w, view_h) * 0.025)
+
+    # Wall segments with midpoint labels.
+    # Labels are suppressed for walls whose screen-space length is too short to
+    # fit readable text (avoids overlapping labels on alcoves / dense polygons).
+    n_pts = len(points)
+    wall_labels = []
+    for i in range(n_pts):
+        a = points[i]
+        b = points[(i + 1) % n_pts]
+        length = float(np.linalg.norm(b - a))
+        ax, ay = to_svg(a)
+        bx, by = to_svg(b)
+        seg_screen_len = float(np.hypot(bx - ax, by - ay))
+        # Minimum screen length required to render a label without overlapping
+        # neighbouring labels (≈4× font height is a comfortable minimum).
+        if seg_screen_len < font_sz * 4.0:
+            continue
+        mx = (ax + bx) / 2.0
+        my = (ay + by) / 2.0
+        # Offset the label slightly outward from the edge midpoint
+        dx = bx - ax
+        dy = by - ay
+        seg_len_svg = max(seg_screen_len, 1e-6)
+        # Normal pointing "outward" (arbitrary sign — just for readability)
+        nx_n = -dy / seg_len_svg
+        ny_n = dx / seg_len_svg
+        offset = min(font_sz * 1.5, 8.0)
+        lx = mx + nx_n * offset
+        ly = my + ny_n * offset
+        # Rotation angle for label to follow wall direction
+        angle_deg = float(np.degrees(np.arctan2(by - ay, bx - ax)))
+        if abs(angle_deg) > 90:
+            angle_deg += 180
+        if units_label == "meters":
+            label_text = f"{length:.2f} m"
+        else:
+            label_text = f"{length:.3f} u"
+        wall_labels.append((lx, ly, angle_deg, label_text))
+
+    # Scale bar: pick a round number (~15 % of width)
+    scene_width = float(size[0])
+    raw_bar = scene_width * 0.15
+    # Round to nearest 0.1 / 0.5 / 1 / 5 / 10 …
+    magnitude = 10 ** int(np.floor(np.log10(max(raw_bar, 1e-6))))
+    for frac in (1, 2, 5, 10):
+        bar_val = frac * magnitude
+        if bar_val >= raw_bar:
+            break
+    bar_px = bar_val / scene_width * float(size[0])  # pixels in SVG space
+    if units_label == "meters":
+        bar_label = f"{bar_val:.4g} m"
+    else:
+        bar_label = f"{bar_val:.4g} u"
+    bar_x0 = margin_l
+    bar_y  = view_h - margin_b * 0.35
+    bar_x1 = bar_x0 + bar_px
+
+    # font_sz already computed above; kept here for the scale-bar / units labels.
+
+    lines = []
+    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w:.3f} {view_h:.3f}" '
+                 f'style="background:#f8f9fa">')
+    lines.append(f'  <!-- Background grid -->')
+    lines.append(f'  <defs>')
+    lines.append(f'    <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">')
+    lines.append(f'      <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#e0e0e0" stroke-width="0.3"/>')
+    lines.append(f'    </pattern>')
+    lines.append(f'  </defs>')
+    lines.append(f'  <rect width="{view_w:.3f}" height="{view_h:.3f}" fill="url(#grid)"/>')
+    lines.append(f'  <!-- Floorplan polygon -->')
+    lines.append(f'  <polygon points="{coords_str}" '
+                 f'fill="#cce7ff" fill-opacity="0.5" stroke="#1565c0" stroke-width="{max(0.8, view_w*0.003):.2f}"/>')
+    lines.append(f'  <!-- Wall-length labels -->')
+    for lx, ly, angle, text in wall_labels:
+        lines.append(
+            f'  <text x="{lx:.3f}" y="{ly:.3f}" '
+            f'font-size="{font_sz:.2f}" font-family="sans-serif" fill="#333" '
+            f'text-anchor="middle" dominant-baseline="middle" '
+            f'transform="rotate({angle:.2f},{lx:.3f},{ly:.3f})">{text}</text>'
+        )
+    lines.append(f'  <!-- Scale bar -->')
+    lines.append(f'  <line x1="{bar_x0:.3f}" y1="{bar_y:.3f}" x2="{bar_x1:.3f}" y2="{bar_y:.3f}" '
+                 f'stroke="#333" stroke-width="{max(1.0, view_w*0.003):.2f}"/>')
+    lines.append(f'  <line x1="{bar_x0:.3f}" y1="{bar_y - 3:.3f}" x2="{bar_x0:.3f}" y2="{bar_y + 3:.3f}" '
+                 f'stroke="#333" stroke-width="{max(1.0, view_w*0.003):.2f}"/>')
+    lines.append(f'  <line x1="{bar_x1:.3f}" y1="{bar_y - 3:.3f}" x2="{bar_x1:.3f}" y2="{bar_y + 3:.3f}" '
+                 f'stroke="#333" stroke-width="{max(1.0, view_w*0.003):.2f}"/>')
+    lines.append(f'  <text x="{(bar_x0+bar_x1)/2:.3f}" y="{bar_y + font_sz * 1.4:.3f}" '
+                 f'font-size="{font_sz:.2f}" font-family="sans-serif" fill="#333" text-anchor="middle">{bar_label}</text>')
+    lines.append(f'  <!-- Units label -->')
+    lines.append(f'  <text x="{margin_l:.3f}" y="{font_sz * 1.4:.3f}" '
+                 f'font-size="{font_sz:.2f}" font-family="sans-serif" fill="#555">Units: {units_label}</text>')
+    lines.append('</svg>')
 
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(svg)
+        f.write("\n".join(lines) + "\n")
+
+
+def _polygon_area(pts: np.ndarray) -> float:
+    """Shoelace formula for signed polygon area (returns absolute value)."""
+    n = len(pts)
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += float(pts[i, 0]) * float(pts[j, 1])
+        area -= float(pts[j, 0]) * float(pts[i, 1])
+    return abs(area) / 2.0
+
+
+def _wall_lengths(pts: np.ndarray) -> list:
+    """Return wall-segment lengths parallel to the polygon coordinate ring.
+
+    The returned list has exactly ``len(pts)`` entries.  Entry *i* is the
+    length of the edge from vertex *i* to vertex *(i+1) % N*, so the last
+    entry is the closing edge from the last vertex back to the first.
+    This 1-to-1 correspondence with the ring vertices is preserved in both
+    the GeoJSON ``wall_lengths`` property and the metadata JSON.
+    """
+    n = len(pts)
+    return [float(np.linalg.norm(pts[(i + 1) % n] - pts[i])) for i in range(n)]
 
 
 def _write_geojson(points: np.ndarray, out_path: str) -> None:
@@ -190,13 +317,20 @@ def _write_geojson(points: np.ndarray, out_path: str) -> None:
     if ring[0] != ring[-1]:
         ring.append(ring[0])
 
+    walls = _wall_lengths(points)
+    area = _polygon_area(points)
+    perimeter = float(sum(walls))
+
     payload = {
         "type": "FeatureCollection",
         "features": [
             {
                 "type": "Feature",
                 "properties": {
-                    "name": "floorplan"
+                    "name": "floorplan",
+                    "area": round(area, 4),
+                    "perimeter": round(perimeter, 4),
+                    "wall_lengths": [round(w, 4) for w in walls]
                 },
                 "geometry": {
                     "type": "Polygon",
@@ -218,12 +352,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Extract floorplan polygon from splat point cloud")
     parser.add_argument("--ply", required=True)
     parser.add_argument("--measurement", default="")
+    parser.add_argument(
+        "--min-vertical-axis-component",
+        default=0.85,
+        type=float,
+        help="Minimum dominant absolute plane-normal component to accept floor candidates (default: 0.85)"
+    )
     parser.add_argument("--svg-out", required=True)
     parser.add_argument("--geojson-out", required=True)
     parser.add_argument("--meta-out", required=True)
     args = parser.parse_args()
 
-    os.makedirs(os.path.dirname(args.svg_out), exist_ok=True)
+    for output_path in (args.svg_out, args.geojson_out, args.meta_out):
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
     result = {
         "status": "unavailable",
@@ -234,19 +377,24 @@ def main() -> None:
         "polygon_points": 0
     }
 
+    if args.min_vertical_axis_component < 0 or args.min_vertical_axis_component > 1:
+        result["reason"] = "min_vertical_axis_component must be in [0, 1]"
+        _write_status(args.meta_out, result)
+        return
+
     points = _load_points(args.ply)
     if points is None:
         result["reason"] = f"Invalid or missing point cloud: {args.ply}"
         _write_status(args.meta_out, result)
         return
 
-    floor = _fit_floor_plane(points)
+    floor = _fit_floor_plane(points, float(args.min_vertical_axis_component))
     if floor is None:
         result["reason"] = "Unable to find robust floor plane"
         _write_status(args.meta_out, result)
         return
 
-    n, d, inliers, threshold = floor
+    n, d, inliers, threshold, dominant_axis_component = floor
     floor_points = points[inliers]
 
     center = floor_points.mean(axis=0)
@@ -272,16 +420,51 @@ def main() -> None:
     _polygon_to_svg(polygon_scaled, args.svg_out, units)
     _write_geojson(polygon_scaled, args.geojson_out)
 
+    walls = _wall_lengths(polygon_scaled)
+    room_area = _polygon_area(polygon_scaled)
+    floor_inlier_count = int(len(floor_points))
+    total_point_count = int(len(points))
+    inlier_ratio = floor_inlier_count / max(total_point_count, 1)
+
+    # Reconstruction quality classification:
+    #   sparse  — very few points or low inlier ratio; output may be coarse
+    #   normal  — typical reconstruction
+    #   dense   — high-quality point cloud
+    if total_point_count < 500 or floor_inlier_count < 50 or inlier_ratio < 0.03:
+        reconstruction_quality = "sparse"
+    elif total_point_count > 20000 and floor_inlier_count > 1000:
+        reconstruction_quality = "dense"
+    else:
+        reconstruction_quality = "normal"
+
+    low_confidence = reconstruction_quality == "sparse"
+
     result.update({
         "status": "ok",
         "reason": "",
         "units": units,
         "scale_factor_m_per_model_unit": float(scale) if scale is not None else None,
-        "floor_inliers": int(len(floor_points)),
+        "floor_inliers": floor_inlier_count,
+        "total_points": total_point_count,
+        "floor_inlier_ratio": round(inlier_ratio, 4),
         "polygon_points": int(len(polygon_scaled)),
+        "room_area": round(room_area, 4),
+        "room_perimeter": round(float(sum(walls)), 4),
+        # wall_lengths[i] = length of edge from vertex i to vertex (i+1)%N,
+        # parallel to the GeoJSON ring coordinates.
+        "wall_lengths": [round(w, 4) for w in walls],
+        "reconstruction_quality": reconstruction_quality,
+        "low_confidence": low_confidence,
+        "scene_validity_note": (
+            "Floorplan extraction assumes a roughly planar floor is visible in the "
+            "point cloud. Results may be unreliable for non-room scenes (single objects, "
+            "ceilings, outdoor areas, or ramps)."
+        ),
         "ransac_threshold": float(threshold),
         "plane_normal": [float(x) for x in n],
         "plane_offset": float(d),
+        "plane_dominant_axis_component": float(dominant_axis_component),
+        "min_vertical_axis_component": float(args.min_vertical_axis_component),
         "outputs": {
             "svg": args.svg_out,
             "geojson": args.geojson_out

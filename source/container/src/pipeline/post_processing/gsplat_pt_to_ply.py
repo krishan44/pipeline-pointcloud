@@ -45,8 +45,7 @@ if __name__ == "__main__":
     ckpt = torch.load(
         last_ckpt_file,
         map_location=torch.device("cpu"),
-        weights_only=True,
-        pickle_module=None
+        weights_only=True
     )
     splats = ckpt["splats"]
 

@@ -759,6 +759,7 @@ if __name__ == "__main__":
            str(config['USE_POSE_PRIOR_TRANSFORM_JSON']).lower() != 'true' and \
            str(config['USE_POSE_PRIOR_COLMAP_MODEL_FILES']).lower() != 'true':
             # For zip archives, count images and use a percentage-based approach
+            _skip_blur_filter = False
             if VIDEO is False and input_filename_extension.lower() == ".zip":
                 # Count the number of images in the directory
                 image_extensions = ('.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG')
@@ -766,44 +767,55 @@ if __name__ == "__main__":
                               if os.path.isfile(os.path.join(image_path, f)) 
                               and any(f.lower().endswith(ext) for ext in image_extensions)]
                 total_images = len(image_files)
-                
-                # Initialize num_to_keep with a default value
-                num_to_keep = 300  # Default value
-                
-                # If we have images, set num_frames_target to 90% of total (adjust as needed)
-                if total_images > 0:
-                    num_to_keep = max(1, int(total_images * 0.9))
-                    log.info(f"Filtering blurry images from zip archive: keeping {num_to_keep} out of {total_images} images")
-                else:
-                    log.warning(f"No images found in {image_path}, using default target of {num_to_keep}")
 
-                args = [
-                    "-I", image_path,
-                    "-r", "30",
-                    "-n", str(num_to_keep),
-                    "-O", image_path
-                ]
+                # Skip the filter entirely for very small sets to avoid culling
+                # images that are essential for SfM (2-5 image room scans).
+                if total_images <= 5:
+                    _skip_blur_filter = True
+                    log.warning(
+                        f"Skipping blur filter: only {total_images} image(s) supplied. "
+                        "Blur filtering is unreliable on very small sets."
+                    )
+                else:
+                    # Build args only when the component will actually be created.
+                    if total_images > 0:
+                        num_to_keep = max(1, int(total_images * 0.9))
+                        log.info(f"Filtering blurry images from zip archive: keeping {num_to_keep} out of {total_images} images")
+                    else:
+                        num_to_keep = 300  # Default fallback
+                        log.warning(f"No images found in {image_path}, using default target of {num_to_keep}")
+                    _zip_filter_args = [
+                        "-I", image_path,
+                        "-r", "30",
+                        "-n", str(num_to_keep),
+                        "-O", image_path
+                    ]
             else:
                 # For videos, use the MAX_NUM_IMAGES parameter as before
-                args = [
-                    "-I", image_path,
-                    "-r", "30",
-                    "-n", str(config['MAX_NUM_IMAGES']),
-                    "-O", image_path
-                ]
+                _zip_filter_args = None
 
-            if str(config['LOG_VERBOSITY'].lower() == "debug"):
-                args.extend(["-v"])
-                
-            pipeline.create_component(
-                name="RemoveBlurryImages",
-                comp_type=ComponentType.transform,
-                comp_environ=ComponentEnvironment.python,
-                command="image_processing/filter_blurry_images.py",
-                args=args,
-                cwd=current_dir_path,
-                requires_gpu=False
-            )
+            if not _skip_blur_filter:
+                if _zip_filter_args is not None:
+                    args = _zip_filter_args
+                else:
+                    args = [
+                        "-I", image_path,
+                        "-r", "30",
+                        "-n", str(config['MAX_NUM_IMAGES']),
+                        "-O", image_path
+                    ]
+                if str(config['LOG_VERBOSITY'].lower() == "debug"):
+                    args.extend(["-v"])
+
+                pipeline.create_component(
+                    name="RemoveBlurryImages",
+                    comp_type=ComponentType.transform,
+                    comp_environ=ComponentEnvironment.python,
+                    command="image_processing/filter_blurry_images.py",
+                    args=args,
+                    cwd=current_dir_path,
+                    requires_gpu=False
+                )
         elif str(config['FILTER_BLURRY_IMAGES']).lower() == "true":
             log.info("Skipping blur filtering because pose priors are enabled - must maintain image correspondence")
     except Exception as e:
@@ -999,7 +1011,27 @@ if __name__ == "__main__":
                 # FEATURE MATCHER COMPONENT
                 # Only use the sequential matcher if the images are in sequential order (e.g. video source)
                 #if VIDEO is True:
-                if config['MATCHING_METHOD'].lower() == "sequential":
+
+                # Auto-detect small image sets and force exhaustive matching for best
+                # coverage — sequential / vocab-tree matchers perform poorly on small sets.
+                # The threshold is configurable via EXHAUSTIVE_MATCHING_MAX_IMAGES in the
+                # job config (default: 20).
+                _image_exts = ('.jpg', '.jpeg', '.png')
+                _img_count = len([
+                    f for f in os.listdir(image_path)
+                    if os.path.isfile(os.path.join(image_path, f))
+                    and f.lower().endswith(_image_exts)
+                ]) if os.path.isdir(image_path) else 0
+                _exhaustive_threshold = int(str(config.get('EXHAUSTIVE_MATCHING_MAX_IMAGES', '20')).strip() or '20')
+                _effective_matching = config['MATCHING_METHOD'].lower()
+                if _img_count > 0 and _img_count < _exhaustive_threshold and _effective_matching not in ("spatial", "exhaustive"):
+                    log.info(
+                        f"Small image set detected ({_img_count} images, threshold={_exhaustive_threshold}): "
+                        "overriding matching method to 'exhaustive' for full pairwise coverage."
+                    )
+                    _effective_matching = "exhaustive"
+
+                if _effective_matching == "sequential":
                     args = [
                         "sequential_matcher",
                         "--database_path",  colmap_db_path,
@@ -1014,14 +1046,14 @@ if __name__ == "__main__":
                         "--SequentialMatching.loop_detection_num_images", config['MAX_NUM_IMAGES'],
                         "--SequentialMatching.vocab_tree_path", f"{config['CODE_PATH']}/vocab_tree_flickr100K_words32K.bin"
                     ])
-                elif config['MATCHING_METHOD'].lower() == "spatial":
+                elif _effective_matching == "spatial":
                     args = [
                         "spatial_matcher",
                         "--database_path", colmap_db_path,
                         "--SpatialMatching.ignore_z", "0",
                         "--SiftMatching.num_threads", pipeline.config.num_threads#,
                     ]
-                elif config['MATCHING_METHOD'].lower() == "vocab":
+                elif _effective_matching == "vocab":
                     args = [
                         "vocab_tree_matcher",
                         "--database_path", colmap_db_path,
@@ -1620,8 +1652,7 @@ if __name__ == "__main__":
     ##################################
     try:
         if config['GENERATE_SPLAT'].lower() == "true" and \
-            str(config['MODEL']).lower() != "nerfacto" and \
-            str(config['SPHERICAL_CAMERA']).lower() == "true":
+            str(config['MODEL']).lower() != "nerfacto":
             floorplan_svg_path = os.path.join(output_path, "floorplan.svg")
             floorplan_geojson_path = os.path.join(output_path, "floorplan.geojson")
             floorplan_meta_path = os.path.join(output_path, "floorplan_metadata.json")
@@ -1684,18 +1715,21 @@ if __name__ == "__main__":
     ##################################
     try:
         if config['GENERATE_SPLAT'].lower() == "true" and \
-            str(config['MODEL']).lower() != "nerfacto" and \
-            str(config['SPHERICAL_CAMERA']).lower() == "true":
+            str(config['MODEL']).lower() != "nerfacto":
             base_name = str(os.path.splitext(config['FILENAME'])[0]).lower()
             uploads = [
                 (os.path.join(output_path, "floorplan.svg"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.svg"),
                 (os.path.join(output_path, "floorplan.geojson"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.geojson"),
                 (os.path.join(output_path, "floorplan_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_metadata.json")
             ]
-            # Note: floorplan exports currently assume files are always produced.
-            # If floorplan generation becomes optional/unavailable in the future,
-            # add the same missing-file guard used by S3-Export-ObjectLayer-*.
+            # Note: skip if floorplan generation failed / produced no output.
             for local_path, s3_path in uploads:
+                if not os.path.isfile(local_path):
+                    log.warning(
+                        "Skipping floorplan S3 export because local artifact is missing: %s",
+                        local_path
+                    )
+                    continue
                 args = ["s3", "cp", local_path, s3_path]
                 pipeline.create_component(
                     name=f"S3-Export-Floorplan-{os.path.basename(local_path)}",
@@ -1717,7 +1751,6 @@ if __name__ == "__main__":
     try:
         if config['GENERATE_SPLAT'].lower() == "true" and \
             str(config['MODEL']).lower() != "nerfacto" and \
-            str(config['SPHERICAL_CAMERA']).lower() == "true" and \
             include_semantic_object_layer:
             base_name = str(os.path.splitext(config['FILENAME'])[0]).lower()
             uploads = [

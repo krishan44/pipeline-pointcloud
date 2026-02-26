@@ -55,8 +55,12 @@ def _plane_from_points(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> Option
     return n, d
 
 
-def _fit_floor_plane(points: np.ndarray, max_iters: int = 900) -> Optional[Tuple[np.ndarray, float, float]]:
-    if len(points) < 500:
+def _fit_floor_plane(
+    points: np.ndarray,
+    min_vertical_axis_component: float,
+    max_iters: int = 700
+) -> Optional[Tuple[np.ndarray, float, np.ndarray, float, float]]:
+    if len(points) < 50:
         return None
 
     bbox_min = points.min(axis=0)
@@ -77,10 +81,15 @@ def _fit_floor_plane(points: np.ndarray, max_iters: int = 900) -> Optional[Tuple
             continue
         n, d = plane
 
+        dominant_axis_component = float(np.max(np.abs(n)))
+        if dominant_axis_component < float(min_vertical_axis_component):
+            continue
+
         distances = np.abs(points @ n + d)
-        inlier_count = int(np.sum(distances < threshold))
-        if inlier_count > best_count and inlier_count >= 250:
-            best = (n, d, threshold)
+        inliers = distances < threshold
+        inlier_count = int(np.sum(inliers))
+        if inlier_count > best_count and inlier_count >= 20:
+            best = (n, d, inliers, threshold, dominant_axis_component)
             best_count = inlier_count
 
     return best
@@ -290,6 +299,12 @@ def main() -> None:
     parser.add_argument("--min-object-area", type=float, default=0.25)
     parser.add_argument("--min-height", type=float, default=0.06)
     parser.add_argument("--max-height", type=float, default=2.8)
+    parser.add_argument(
+        "--min-vertical-axis-component",
+        default=0.85,
+        type=float,
+        help="Minimum dominant absolute plane-normal component to accept floor candidates (default: 0.85)"
+    )
     args = parser.parse_args()
 
     for output_path in (args.geojson_out, args.svg_out, args.meta_out):
@@ -324,12 +339,16 @@ def main() -> None:
         _write_unavailable(f"Missing or invalid PLY: {args.ply}")
         return
 
-    floor = _fit_floor_plane(points)
+    if args.min_vertical_axis_component < 0 or args.min_vertical_axis_component > 1:
+        _write_unavailable("min_vertical_axis_component must be in [0, 1]")
+        return
+
+    floor = _fit_floor_plane(points, float(args.min_vertical_axis_component))
     if floor is None:
         _write_unavailable("Could not detect floor plane")
         return
 
-    n, d, threshold = floor
+    n, d, floor_inliers, threshold, dominant_axis_component = floor
     signed = points @ n + d
     if float(np.median(signed)) < 0:
         n = -n
@@ -345,7 +364,7 @@ def main() -> None:
         _write_unavailable("Too few object points above floor")
         return
 
-    center = points.mean(axis=0)
+    center = points[floor_inliers].mean(axis=0)
     axis_u, axis_v = _make_plane_basis(n)
     rel = object_points - center
     uv = np.column_stack((rel @ axis_u, rel @ axis_v))
@@ -368,6 +387,17 @@ def main() -> None:
     _write_geojson(polygons, units, args.geojson_out)
     _write_svg(floor_polygon, polygons, units, args.svg_out)
 
+    total_point_count = int(len(points))
+    floor_inlier_count = int(np.sum(floor_inliers))
+    inlier_ratio = floor_inlier_count / max(total_point_count, 1)
+
+    if total_point_count < 500 or floor_inlier_count < 50 or inlier_ratio < 0.03:
+        reconstruction_quality = "sparse"
+    elif total_point_count > 20000 and floor_inlier_count > 1000:
+        reconstruction_quality = "dense"
+    else:
+        reconstruction_quality = "normal"
+
     meta.update({
         "status": "ok",
         "reason": "",
@@ -375,10 +405,20 @@ def main() -> None:
         "scale_factor_m_per_model_unit": float(scale) if scale is not None else None,
         "objects": int(len(polygons)),
         "object_points": int(len(object_points)),
+        "reconstruction_quality": reconstruction_quality,
+        "low_confidence": reconstruction_quality == "sparse",
+        "scene_validity_note": (
+            "Object layer extraction assumes a roughly planar floor is visible in the "
+            "point cloud. Results may be unreliable for non-room scenes."
+        ),
         "floor_plane": {
             "normal": [float(x) for x in n],
             "offset": float(d),
-            "threshold": float(threshold)
+            "threshold": float(threshold),
+            "inliers": floor_inlier_count,
+            "inlier_ratio": round(inlier_ratio, 4),
+            "dominant_axis_component": float(dominant_axis_component),
+            "min_vertical_axis_component": float(args.min_vertical_axis_component)
         },
         "outputs": {
             "geojson": args.geojson_out,

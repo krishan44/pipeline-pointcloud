@@ -65,36 +65,27 @@ def mirror_ply(input_path, output_path=None, axis='x'):
     # Mirror positions
     mirrored_positions = np.dot(positions, mirror_matrix)
     
-    # Handle rotations (mirroring changes handedness)
-    mirrored_rotations = []
-    for q in rotations:
-        # Convert from scalar-first to scalar-last format for scipy
-        q_scipy_format = np.array([q[1], q[2], q[3], q[0]])
-        
-        # Create rotation from quaternion
-        existing_rot = Rotation.from_quat(q_scipy_format)
-        rot_matrix = existing_rot.as_matrix()
-        
-        # Apply mirror transformation
-        mirrored_rot_matrix = np.dot(mirror_matrix, rot_matrix)
-        
-        # Handle determinant change due to reflection
-        if np.linalg.det(mirrored_rot_matrix) < 0:
-            mirrored_rot_matrix[:, 0] = -mirrored_rot_matrix[:, 0]
-        
-        # Convert back to quaternion
-        try:
-            mirrored_rot = Rotation.from_matrix(mirrored_rot_matrix)
-            mirrored_quat = mirrored_rot.as_quat()  # x, y, z, w format
-            
-            # Convert back to scalar-first format
-            mirrored_rotations.append([mirrored_quat[3], mirrored_quat[0], mirrored_quat[1], mirrored_quat[2]])
-        except ValueError:
-            # If conversion fails, use original quaternion
-            print(f"Warning: Failed to convert mirrored rotation matrix to quaternion. Using original quaternion.")
-            mirrored_rotations.append(q)
-    
-    mirrored_rotations = np.array(mirrored_rotations)
+    # Handle rotations (mirroring changes handedness) in batch
+    q_scipy_format = np.column_stack((rotations[:, 1], rotations[:, 2], rotations[:, 3], rotations[:, 0]))
+    rot_matrices = Rotation.from_quat(q_scipy_format).as_matrix()
+    mirrored_rot_matrices = np.einsum('ij,njk->nik', mirror_matrix, rot_matrices)
+
+    dets = np.linalg.det(mirrored_rot_matrices)
+    reflection_mask = dets < 0.0
+    if np.any(reflection_mask):
+        mirrored_rot_matrices[reflection_mask, :, 0] *= -1.0
+
+    try:
+        mirrored_quats_xyzw = Rotation.from_matrix(mirrored_rot_matrices).as_quat()
+        mirrored_rotations = np.column_stack((
+            mirrored_quats_xyzw[:, 3],
+            mirrored_quats_xyzw[:, 0],
+            mirrored_quats_xyzw[:, 1],
+            mirrored_quats_xyzw[:, 2]
+        ))
+    except ValueError:
+        print("Warning: Failed to convert some mirrored rotation matrices to quaternions. Using original quaternions.")
+        mirrored_rotations = rotations.copy()
     
     # Extract spherical harmonic coefficients if they exist
     sh_fields = {'dc': [], 'rest': []}
