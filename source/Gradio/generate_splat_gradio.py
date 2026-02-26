@@ -82,6 +82,7 @@ class SharedState:
         self.mask_threshold = 0.6
         self.measure_reference_type = "none"
         self.tripod_height_m = 0.0
+        self.enable_semantic_object_layer = "false"
         self.model_3d = None
         self.rotate_splat = "true"
 
@@ -254,7 +255,7 @@ def preview_json(s3_bucket_name, s3_input_prefix, s3_output_prefix, video_file,
                 filter_blurry, max_images, sfm_enable, enhanced_feature, matching_method, use_colmap_model,
                 use_transform_json, training_enable, max_steps, enable_multi_gpu, spherical_enable, remove_bg, remove_human,
                 source_coordinate, pose_world_to_cam, log_verbosity, mask_threshold, rotate_splat,
-                measure_reference_type, tripod_height_m):
+                measure_reference_type, tripod_height_m, enable_semantic_object_layer="false"):
     unique_uuid = uuid.uuid4()
     original_filename = os.path.basename(video_file) if video_file else "No file selected"
     
@@ -316,6 +317,9 @@ def preview_json(s3_bucket_name, s3_input_prefix, s3_output_prefix, video_file,
         "measurement": {
             "referenceType": measure_reference_type,
             "tripodHeightM": str(tripod_height_m)
+        },
+        "semantic": {
+            "enableObjectLayer": str(enable_semantic_object_layer).lower() == "true"
         }
     }
     
@@ -328,7 +332,8 @@ def generate_splat(s3_bucket_name, s3_input_prefix, s3_output_prefix, file_obj,
                   use_transform_json, training_enable, max_steps, enable_multi_gpu, 
                   spherical_enable, remove_bg, remove_human, source_coordinate, 
                   pose_world_to_cam, log_verbosity, mask_threshold, measure_reference_type="none",
-                  tripod_height_m=0.0, media_input_prefix="media-input", rotate_splat="babylon"):
+                  tripod_height_m=0.0, media_input_prefix="media-input", rotate_splat="babylon",
+                  enable_semantic_object_layer="false"):
     try:
         session = boto3.Session()
         s3 = session.client('s3')
@@ -365,6 +370,7 @@ def generate_splat(s3_bucket_name, s3_input_prefix, s3_output_prefix, file_obj,
         tripod_height_m = getattr(tripod_height_m, 'value', tripod_height_m)
         media_input_prefix = getattr(media_input_prefix, 'value', media_input_prefix)
         rotate_splat = getattr(rotate_splat, 'value', rotate_splat)
+        enable_semantic_object_layer = getattr(enable_semantic_object_layer, 'value', enable_semantic_object_layer)
 
         # Step 1: Upload the video file to media-input prefix with basename_uuid.ext format
         original_filename = os.path.basename(file_obj.name)
@@ -431,6 +437,9 @@ def generate_splat(s3_bucket_name, s3_input_prefix, s3_output_prefix, file_obj,
             "measurement": {
                 "referenceType": str(measure_reference_type),
                 "tripodHeightM": str(tripod_height_m)
+            },
+            "semantic": {
+                "enableObjectLayer": str(enable_semantic_object_layer).lower() == "true"
             }
         }
 
@@ -569,6 +578,9 @@ def create_upload_aws_tab():
                             "measurement": {
                                 "referenceType": shared_state.measure_reference_type,
                                 "tripodHeightM": str(shared_state.tripod_height_m)
+                            },
+                            "semantic": {
+                                "enableObjectLayer": shared_state.enable_semantic_object_layer == "true"
                             }
                         }
                         
@@ -654,6 +666,11 @@ def create_advanced_settings_tab():
                     value=0.0,
                     minimum=0.0,
                     maximum=5.0
+                )
+                enable_semantic_object_layer = gr.Radio(
+                    label="Include Semantic Object Layer",
+                    choices=["true", "false"],
+                    value="false"
                 )
         with gr.Row():
             with gr.Column():
@@ -816,7 +833,8 @@ def create_advanced_settings_tab():
                      shared_state.source_coordinate, shared_state.pose_world_to_cam,
                      shared_state.log_verbosity, shared_state.mask_threshold,
                      shared_state.rotate_splat,
-                     shared_state.measure_reference_type, shared_state.tripod_height_m) = args
+                     shared_state.measure_reference_type, shared_state.tripod_height_m,
+                     shared_state.enable_semantic_object_layer) = args
                     return "Advanced settings updated"
 
                 # Get all advanced settings components after they're defined
@@ -828,7 +846,7 @@ def create_advanced_settings_tab():
                     spherical_enable, remove_bg,
                     remove_human, source_coordinate, pose_world_to_cam,
                     log_verbosity, mask_threshold, rotate_splat,
-                    measure_reference_type, tripod_height_m
+                    measure_reference_type, tripod_height_m, enable_semantic_object_layer
                 ]
 
                 # Update shared state when any value changes
@@ -1765,7 +1783,8 @@ def create_debug_tab():
                         shared_state.mask_threshold,
                         shared_state.rotate_splat,
                         shared_state.measure_reference_type,
-                        shared_state.tripod_height_m
+                        shared_state.tripod_height_m,
+                        shared_state.enable_semantic_object_layer
                     )
 
             preview_btn.click(

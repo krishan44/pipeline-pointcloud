@@ -534,6 +534,7 @@ if __name__ == "__main__":
     log.info(f"S3 Output Path: {config['S3_OUTPUT']}")
     log.info(f"Measurement Reference Type: {config.get('MEASURE_REFERENCE_TYPE', 'none')}")
     log.info(f"Tripod Height (m): {config.get('TRIPOD_HEIGHT_M', '0.0')}")
+    log.info(f"Semantic Object Layer Enabled: {config.get('ENABLE_SEMANTIC_OBJECT_LAYER', 'false')}")
 
     try:
         tripod_height = float(str(config.get('TRIPOD_HEIGHT_M', '0.0')).strip())
@@ -548,6 +549,16 @@ if __name__ == "__main__":
         str(config.get('MEASURE_REFERENCE_TYPE', 'none')).lower() == 'tripod_height'
         and tripod_height > 0.0
     )
+
+    include_semantic_object_layer = (
+        str(config.get('ENABLE_SEMANTIC_OBJECT_LAYER', 'false')).lower() == 'true'
+    )
+    try:
+        semantic_min_object_area_m2 = float(str(config.get('SEMANTIC_MIN_OBJECT_AREA_M2', '0.25')).strip())
+        if semantic_min_object_area_m2 <= 0:
+            semantic_min_object_area_m2 = 0.25
+    except Exception:
+        semantic_min_object_area_m2 = 0.25
 
     # Resolve actual local media file path and correct dataset path if needed
     try:
@@ -1601,6 +1612,129 @@ if __name__ == "__main__":
             )
     except Exception as e:
         error_message = f"Issue uploading measurement scale JSON to S3: {e}"
+        pipeline.report_error(786, error_message)
+
+    ##################################
+    # TRANSFORM COMPONENT:
+    # Extract floorplan (SVG + GeoJSON) from splat point cloud
+    ##################################
+    try:
+        if config['GENERATE_SPLAT'].lower() == "true" and \
+            str(config['MODEL']).lower() != "nerfacto" and \
+            str(config['SPHERICAL_CAMERA']).lower() == "true":
+            floorplan_svg_path = os.path.join(output_path, "floorplan.svg")
+            floorplan_geojson_path = os.path.join(output_path, "floorplan.geojson")
+            floorplan_meta_path = os.path.join(output_path, "floorplan_metadata.json")
+
+            args = [
+                "--ply", os.path.join(output_path, "splat.ply"),
+                "--measurement", os.path.join(output_path, "measurement_scale.json"),
+                "--svg-out", floorplan_svg_path,
+                "--geojson-out", floorplan_geojson_path,
+                "--meta-out", floorplan_meta_path
+            ]
+            pipeline.create_component(
+                name="Extract-Floorplan",
+                comp_type=ComponentType.transform,
+                comp_environ=ComponentEnvironment.python,
+                command="post_processing/extract_floorplan.py",
+                args=args,
+                cwd=current_dir_path,
+                requires_gpu=False
+            )
+    except Exception as e:
+        error_message = f"Issue extracting floorplan from point cloud: {e}"
+        pipeline.report_error(786, error_message)
+
+    ##################################
+    # TRANSFORM COMPONENT:
+    # Extract semantic-like object layer from reconstructed room points
+    ##################################
+    try:
+        if config['GENERATE_SPLAT'].lower() == "true" and \
+            str(config['MODEL']).lower() != "nerfacto" and \
+            str(config['SPHERICAL_CAMERA']).lower() == "true" and \
+            include_semantic_object_layer:
+            args = [
+                "--ply", os.path.join(output_path, "splat.ply"),
+                "--measurement", os.path.join(output_path, "measurement_scale.json"),
+                "--floorplan-geojson", os.path.join(output_path, "floorplan.geojson"),
+                "--images-dir", image_path,
+                "--geojson-out", os.path.join(output_path, "floorplan_objects.geojson"),
+                "--svg-out", os.path.join(output_path, "floorplan_with_objects.svg"),
+                "--meta-out", os.path.join(output_path, "floorplan_objects_metadata.json"),
+                "--min-object-area", str(semantic_min_object_area_m2)
+            ]
+            pipeline.create_component(
+                name="Extract-Object-Layer",
+                comp_type=ComponentType.transform,
+                comp_environ=ComponentEnvironment.python,
+                command="post_processing/extract_object_layer.py",
+                args=args,
+                cwd=current_dir_path,
+                requires_gpu=False
+            )
+    except Exception as e:
+        error_message = f"Issue extracting semantic object layer: {e}"
+        pipeline.report_error(786, error_message)
+
+    ##################################
+    # EXPORT COMPONENT:
+    # Export floorplan artifacts to S3
+    ##################################
+    try:
+        if config['GENERATE_SPLAT'].lower() == "true" and \
+            str(config['MODEL']).lower() != "nerfacto" and \
+            str(config['SPHERICAL_CAMERA']).lower() == "true":
+            base_name = str(os.path.splitext(config['FILENAME'])[0]).lower()
+            uploads = [
+                (os.path.join(output_path, "floorplan.svg"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.svg"),
+                (os.path.join(output_path, "floorplan.geojson"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.geojson"),
+                (os.path.join(output_path, "floorplan_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_metadata.json")
+            ]
+            for local_path, s3_path in uploads:
+                args = ["s3", "cp", local_path, s3_path]
+                pipeline.create_component(
+                    name=f"S3-Export-Floorplan-{os.path.basename(local_path)}",
+                    comp_type=ComponentType.exporter,
+                    comp_environ=ComponentEnvironment.executable,
+                    command="aws",
+                    args=args,
+                    cwd=current_dir_path,
+                    requires_gpu=False
+                )
+    except Exception as e:
+        error_message = f"Issue uploading floorplan assets to S3: {e}"
+        pipeline.report_error(786, error_message)
+
+    ##################################
+    # EXPORT COMPONENT:
+    # Export semantic object layer assets to S3
+    ##################################
+    try:
+        if config['GENERATE_SPLAT'].lower() == "true" and \
+            str(config['MODEL']).lower() != "nerfacto" and \
+            str(config['SPHERICAL_CAMERA']).lower() == "true" and \
+            include_semantic_object_layer:
+            base_name = str(os.path.splitext(config['FILENAME'])[0]).lower()
+            uploads = [
+                (os.path.join(output_path, "floorplan_objects.geojson"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_objects.geojson"),
+                (os.path.join(output_path, "floorplan_with_objects.svg"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_with_objects.svg"),
+                (os.path.join(output_path, "floorplan_objects_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_objects_metadata.json")
+            ]
+            for local_path, s3_path in uploads:
+                args = ["s3", "cp", local_path, s3_path]
+                pipeline.create_component(
+                    name=f"S3-Export-ObjectLayer-{os.path.basename(local_path)}",
+                    comp_type=ComponentType.exporter,
+                    comp_environ=ComponentEnvironment.executable,
+                    command="aws",
+                    args=args,
+                    cwd=current_dir_path,
+                    requires_gpu=False
+                )
+    except Exception as e:
+        error_message = f"Issue uploading semantic object layer assets to S3: {e}"
         pipeline.report_error(786, error_message)
 
     ##################################

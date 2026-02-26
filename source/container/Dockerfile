@@ -325,6 +325,9 @@ COPY ./src/pipeline/segmentation/remove_background.py           ${CODE_PATH}/seg
 COPY ./src/pipeline/post_processing/rotate_splat.py             ${CODE_PATH}/post_processing
 COPY ./src/pipeline/post_processing/mirror_splat.py             ${CODE_PATH}/post_processing
 COPY ./src/pipeline/post_processing/gsplat_pt_to_ply.py         ${CODE_PATH}/post_processing
+COPY ./src/pipeline/post_processing/estimate_scale_from_tripod.py ${CODE_PATH}/post_processing
+COPY ./src/pipeline/post_processing/extract_floorplan.py        ${CODE_PATH}/post_processing
+COPY ./src/pipeline/post_processing/extract_object_layer.py     ${CODE_PATH}/post_processing
 COPY ./src/pipeline/post_processing/spz                         ${CODE_PATH}/post_processing/spz
 COPY ./src/pipeline/segmentation/remove_background_sam2.py      ${CODE_PATH}/sam
 

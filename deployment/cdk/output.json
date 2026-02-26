@@ -17,14 +17,8 @@
   "GSWorkflowPostDeployStack": {
     "ModelsArchiveLocation": "s3://3dgs-bucket-o7vo1a/models/models.tar.gz",
     "ECRRepositoryName": "3dgs-ecr-repo-o7vo1a",
-    "ContainerDeploymentDockerImageUri89099063": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/cdk-hnb659fds-container-assets-762233765429-eu-west-2:06b8d861e524343d15c014de0c6c4cdd185d695803f16fa3b60ad03da1605603",
+    "ContainerDeploymentDockerImageUri89099063": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/cdk-hnb659fds-container-assets-762233765429-eu-west-2:2d826a3d42b14c6357c65199b8fe3d9155c954d6c73b09303bef96fbe0e058f3",
     "DeploymentBucketName": "3dgs-bucket-o7vo1a",
     "ContainerDeploymentECRRepositoryUri33CFE539": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-o7vo1a"
-  },
-  "MeasurementDefaults": {
-    "MeasureReferenceType": "tripod_height",
-    "TripodHeightM": "1.6",
-    "OutputArtifactSuffix": "_measurement_scale.json",
-    "Description": "Tripod height based metric scale estimation for generated PLY outputs"
   }
 }

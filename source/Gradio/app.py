@@ -226,7 +226,8 @@ class GaussianSplattingUI:
                    spherical_angled_up_views=False,
                    spherical_angled_down_views=False,
                    use_tripod_scale=False,
-                   tripod_height_m=1.6):
+                   tripod_height_m=1.6,
+                   enable_semantic_object_layer=False):
         """Submit reconstruction job to Step Functions"""
         
         # Validate inputs
@@ -280,6 +281,7 @@ class GaussianSplattingUI:
             "ROTATE_SPLAT": str(rotate_splat).lower(),
             "MEASURE_REFERENCE_TYPE": "tripod_height" if use_tripod_scale else "none",
             "TRIPOD_HEIGHT_M": str(resolved_tripod_height if use_tripod_scale else 0.0),
+            "ENABLE_SEMANTIC_OBJECT_LAYER": str(enable_semantic_object_layer).lower(),
             # Configuration passed to Step Function for SageMaker training job
             "ECR_IMAGE_URI": CONFIG['ECR_IMAGE_URI'],
             "CONTAINER_ROLE_ARN": CONFIG['CONTAINER_ROLE_ARN'],
@@ -639,6 +641,11 @@ def create_gradio_interface():
                                 precision=3,
                                 info="Measure floor to camera optical center (meters)"
                             )
+                            enable_semantic_object_layer = gr.Checkbox(
+                                label="Include Semantic Object Layer",
+                                value=False,
+                                info="Adds object-footprint overlay outputs for floorplans"
+                            )
                 
                 submit_btn = gr.Button("🚀 Submit Reconstruction Job", size="lg", variant="primary")
                 
@@ -651,7 +658,7 @@ def create_gradio_interface():
                               spherical_camera, rotate_splat, instance_type,
                               optimize_seq_spherical, spherical_use_oval_nodes,
                               spherical_angled_up_views, spherical_angled_down_views,
-                              use_tripod_scale, tripod_height_m],
+                              use_tripod_scale, tripod_height_m, enable_semantic_object_layer],
                     outputs=submission_output
                 )
             
