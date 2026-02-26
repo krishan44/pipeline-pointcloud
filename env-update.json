@@ -3,7 +3,7 @@
                       "STATE_MACHINE_PARAM_NAME":  "3dgs-sfn-arn-o7vo1a",
                       "SNS_TOPIC_ARN":  "arn:aws:sns:eu-west-2:762233765429:GSWorkflowBaseStack-NotificationConstructNotificationTopic211862B9-iZhUklp0F1q7",
                       "CONTAINER_ROLE_NAME":  "3dgs-container-role-o7vo1a",
-                      "ECR_IMAGE_URI":  "762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-o7vo1a:20260225-134440",
+                      "ECR_IMAGE_URI":  "762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-o7vo1a:20260225-190421",
                       "DDB_TABLE_NAME":  "3dgs-ddb-table-o7vo1a",
                       "LAMBDA_COMPLETE_NAME":  "GSWorkflowBaseStack-LambdaWorkflowCompleteConstruc-jz8aScDJQjAJ"
                   }
