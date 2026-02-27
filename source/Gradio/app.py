@@ -41,6 +41,8 @@ CONFIG = {
 IMAGE_FORMATS = {'.png', '.jpg', '.jpeg'}
 VIDEO_FORMATS = {'.mp4', '.mov'}
 ALLOWED_FORMATS_SET = {ext.lower() for ext in CONFIG['ALLOWED_FORMATS']}
+MIN_IMAGES_FOR_SFM = 3
+MIN_PANORAMAS_FOR_SPHERICAL_SFM = 3
 
 # If CDK outputs are available, prefer them over hard-coded defaults / env vars.
 try:
@@ -219,6 +221,18 @@ class GaussianSplattingUI:
 
         # Unknown format
         raise ValueError('Unsupported file input format')
+
+    def _count_uploaded_images(self, files):
+        """Count uploaded image files from Gradio file payload."""
+        image_count = 0
+        for f in files or []:
+            try:
+                _, orig_name = self._resolve_file(f)
+            except Exception:
+                continue
+            if Path(orig_name).suffix.lower() in IMAGE_FORMATS:
+                image_count += 1
+        return image_count
     
     def submit_job(self, email, job_name, files, 
                    filter_blurry=True, run_sfm=True, sfm_software="glomap",
@@ -242,6 +256,23 @@ class GaussianSplattingUI:
         valid, msg = self.validate_files(files)
         if not valid:
             return f"❌ File Validation Error: {msg}"
+
+        # Fast-fail underconstrained SfM jobs (common source of COLMAP sparse model failures)
+        image_count = self._count_uploaded_images(files)
+        if run_sfm and image_count > 0:
+            if spherical_camera and image_count < MIN_PANORAMAS_FOR_SPHERICAL_SFM:
+                return (
+                    "❌ Input Validation Error: Spherical SfM needs at least "
+                    f"{MIN_PANORAMAS_FOR_SPHERICAL_SFM} panorama viewpoints. "
+                    f"You uploaded {image_count}. "
+                    "Add more distinct camera positions (not just rotations) and try again."
+                )
+            if image_count < MIN_IMAGES_FOR_SFM:
+                return (
+                    "❌ Input Validation Error: SfM needs at least "
+                    f"{MIN_IMAGES_FOR_SFM} images with overlap. "
+                    f"You uploaded {image_count}."
+                )
         
         # Generate job UUID
         job_uuid = str(uuid.uuid4())
