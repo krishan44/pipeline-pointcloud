@@ -775,9 +775,13 @@ def create_gradio_interface():
                 - **point_cloud.ply** - Point cloud (large, 10-500 MB)
                 - **gaussian_splat.spz** - Compressed 3D Gaussian Splat model
                 - **transforms.json** - Camera poses and metadata
+                - **<input_basename>_floorplan.png** - Floorplan image (PNG)
+                - **<input_basename>_floorplan.svg** - Floorplan vector image
+                - **<input_basename>_floorplan.geojson** - Floorplan polygon data
+                - **<input_basename>_floorplan_metadata.json** - Floorplan diagnostics/metrics
                 - **training_logs.txt** - Processing logs
                 
-                **Tip:** Click "List Files" first to see all available files for your job!
+                **Tip:** Click "List Files" first, then copy the exact floorplan filename from the list.
                 """)
             
             # ===== INFO TAB =====

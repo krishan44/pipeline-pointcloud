@@ -1654,6 +1654,7 @@ if __name__ == "__main__":
         if config['GENERATE_SPLAT'].lower() == "true" and \
             str(config['MODEL']).lower() != "nerfacto":
             floorplan_svg_path = os.path.join(output_path, "floorplan.svg")
+            floorplan_png_path = os.path.join(output_path, "floorplan.png")
             floorplan_geojson_path = os.path.join(output_path, "floorplan.geojson")
             floorplan_meta_path = os.path.join(output_path, "floorplan_metadata.json")
 
@@ -1661,6 +1662,7 @@ if __name__ == "__main__":
                 "--ply", os.path.join(output_path, "splat.ply"),
                 "--measurement", os.path.join(output_path, "measurement_scale.json"),
                 "--svg-out", floorplan_svg_path,
+                "--png-out", floorplan_png_path,
                 "--geojson-out", floorplan_geojson_path,
                 "--meta-out", floorplan_meta_path
             ]
@@ -1719,6 +1721,7 @@ if __name__ == "__main__":
             base_name = str(os.path.splitext(config['FILENAME'])[0]).lower()
             uploads = [
                 (os.path.join(output_path, "floorplan.svg"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.svg"),
+                (os.path.join(output_path, "floorplan.png"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.png"),
                 (os.path.join(output_path, "floorplan.geojson"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.geojson"),
                 (os.path.join(output_path, "floorplan_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_metadata.json")
             ]

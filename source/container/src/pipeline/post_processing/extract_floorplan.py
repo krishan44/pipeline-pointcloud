@@ -95,6 +95,41 @@ def _fit_floor_plane(
     return best
 
 
+def _fallback_plane_basis_from_pca(points: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    if len(points) < 10:
+        return None
+
+    centered = points - points.mean(axis=0)
+    try:
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    except Exception:
+        return None
+
+    if vh.shape != (3, 3):
+        return None
+
+    axis_u = vh[0].astype(np.float64)
+    axis_v = vh[1].astype(np.float64)
+    axis_n = vh[2].astype(np.float64)
+
+    axis_u = axis_u / (np.linalg.norm(axis_u) + 1e-12)
+    axis_v = axis_v / (np.linalg.norm(axis_v) + 1e-12)
+    axis_n = axis_n / (np.linalg.norm(axis_n) + 1e-12)
+    return axis_u, axis_v, axis_n
+
+
+def _fallback_rectangle_polygon(points_2d: np.ndarray) -> Optional[np.ndarray]:
+    if len(points_2d) < 3:
+        return None
+
+    pts = points_2d.astype(np.float32)
+    rect = cv2.minAreaRect(pts)
+    box = cv2.boxPoints(rect)
+    if box is None or len(box) < 3:
+        return None
+    return box.astype(np.float64)
+
+
 def _make_plane_basis(n: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     helper = np.array([1.0, 0.0, 0.0], dtype=np.float64)
     if abs(float(np.dot(helper, n))) > 0.9:
@@ -286,6 +321,138 @@ def _polygon_to_svg(points: np.ndarray, out_path: str, units_label: str) -> None
         f.write("\n".join(lines) + "\n")
 
 
+def _polygon_to_png(points: np.ndarray, out_path: str, units_label: str) -> None:
+    if len(points) < 3:
+        return
+
+    mins = points.min(axis=0)
+    maxs = points.max(axis=0)
+    size = np.maximum(maxs - mins, 1e-6)
+
+    canvas_w = 1280
+    canvas_h = 960
+    margin_l = 120
+    margin_r = 80
+    margin_t = 80
+    margin_b = 140
+
+    draw_w = max(canvas_w - margin_l - margin_r, 64)
+    draw_h = max(canvas_h - margin_t - margin_b, 64)
+
+    scale_xy = min(draw_w / float(size[0]), draw_h / float(size[1]))
+    if scale_xy <= 0:
+        return
+
+    x_offset = margin_l + (draw_w - float(size[0]) * scale_xy) * 0.5
+    y_offset = margin_t + (draw_h - float(size[1]) * scale_xy) * 0.5
+
+    def to_px(p):
+        x = int(round((p[0] - mins[0]) * scale_xy + x_offset))
+        y = int(round(canvas_h - ((p[1] - mins[1]) * scale_xy + y_offset)))
+        return x, y
+
+    image = np.full((canvas_h, canvas_w, 3), 248, dtype=np.uint8)
+
+    grid_step = max(int(round(min(draw_w, draw_h) / 24.0)), 20)
+    for x in range(0, canvas_w, grid_step):
+        cv2.line(image, (x, 0), (x, canvas_h - 1), (230, 230, 230), 1)
+    for y in range(0, canvas_h, grid_step):
+        cv2.line(image, (0, y), (canvas_w - 1, y), (230, 230, 230), 1)
+
+    pts = np.array([to_px(p) for p in points], dtype=np.int32)
+    cv2.fillPoly(image, [pts], color=(255, 231, 204))
+    cv2.polylines(image, [pts], isClosed=True, color=(192, 101, 21), thickness=3)
+
+    walls = _wall_lengths(points)
+    n_pts = len(points)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.6
+    thickness = 2
+
+    for i in range(n_pts):
+        a = points[i]
+        b = points[(i + 1) % n_pts]
+        ax, ay = to_px(a)
+        bx, by = to_px(b)
+        seg_len = float(np.hypot(bx - ax, by - ay))
+        if seg_len < 80:
+            continue
+
+        mx = int(round((ax + bx) / 2.0))
+        my = int(round((ay + by) / 2.0))
+        dx = bx - ax
+        dy = by - ay
+        inv = 1.0 / max(seg_len, 1e-6)
+        nx = int(round(-dy * inv * 16.0))
+        ny = int(round(dx * inv * 16.0))
+
+        if units_label == "meters":
+            text = f"{walls[i]:.2f} m"
+        else:
+            text = f"{walls[i]:.3f} u"
+
+        (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+        tx = mx + nx - tw // 2
+        ty = my + ny + th // 2
+
+        cv2.rectangle(
+            image,
+            (tx - 6, ty - th - 6),
+            (tx + tw + 6, ty + baseline + 6),
+            (248, 248, 248),
+            -1
+        )
+        cv2.putText(image, text, (tx, ty), font, font_scale, (40, 40, 40), thickness, cv2.LINE_AA)
+
+    width_units = float(size[0])
+    raw_bar = width_units * 0.15
+    magnitude = 10 ** int(np.floor(np.log10(max(raw_bar, 1e-6))))
+    bar_val = magnitude
+    for frac in (1, 2, 5, 10):
+        candidate = frac * magnitude
+        if candidate >= raw_bar:
+            bar_val = candidate
+            break
+
+    bar_len_px = int(round(bar_val * scale_xy))
+    bar_len_px = max(bar_len_px, 40)
+    bar_x0 = margin_l
+    bar_y = canvas_h - margin_b // 2
+    bar_x1 = min(bar_x0 + bar_len_px, canvas_w - margin_r)
+
+    cv2.line(image, (bar_x0, bar_y), (bar_x1, bar_y), (50, 50, 50), 3)
+    cv2.line(image, (bar_x0, bar_y - 8), (bar_x0, bar_y + 8), (50, 50, 50), 3)
+    cv2.line(image, (bar_x1, bar_y - 8), (bar_x1, bar_y + 8), (50, 50, 50), 3)
+
+    if units_label == "meters":
+        bar_text = f"{bar_val:.4g} m"
+    else:
+        bar_text = f"{bar_val:.4g} u"
+    cv2.putText(
+        image,
+        bar_text,
+        (bar_x0 + max((bar_x1 - bar_x0) // 2 - 40, 0), bar_y + 38),
+        font,
+        0.8,
+        (40, 40, 40),
+        2,
+        cv2.LINE_AA
+    )
+
+    cv2.putText(
+        image,
+        f"Units: {units_label}",
+        (margin_l, margin_t // 2 + 10),
+        font,
+        0.8,
+        (60, 60, 60),
+        2,
+        cv2.LINE_AA
+    )
+
+    cv2.imwrite(out_path, image)
+
+
 def _polygon_area(pts: np.ndarray) -> float:
     """Shoelace formula for signed polygon area (returns absolute value)."""
     n = len(pts)
@@ -359,11 +526,12 @@ def main() -> None:
         help="Minimum dominant absolute plane-normal component to accept floor candidates (default: 0.85)"
     )
     parser.add_argument("--svg-out", required=True)
+    parser.add_argument("--png-out", required=True)
     parser.add_argument("--geojson-out", required=True)
     parser.add_argument("--meta-out", required=True)
     args = parser.parse_args()
 
-    for output_path in (args.svg_out, args.geojson_out, args.meta_out):
+    for output_path in (args.svg_out, args.png_out, args.geojson_out, args.meta_out):
         output_dir = os.path.dirname(output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
@@ -389,25 +557,48 @@ def main() -> None:
         return
 
     floor = _fit_floor_plane(points, float(args.min_vertical_axis_component))
+    used_fallback_projection = False
+
     if floor is None:
-        result["reason"] = "Unable to find robust floor plane"
-        _write_status(args.meta_out, result)
-        return
+        pca_basis = _fallback_plane_basis_from_pca(points)
+        if pca_basis is None:
+            result["reason"] = "Unable to find robust floor plane or fallback PCA basis"
+            _write_status(args.meta_out, result)
+            return
 
-    n, d, inliers, threshold, dominant_axis_component = floor
-    floor_points = points[inliers]
+        axis_u, axis_v, n = pca_basis
+        d = -float(np.dot(n, points.mean(axis=0)))
+        threshold = 0.0
+        dominant_axis_component = float(np.max(np.abs(n)))
+        floor_points = points
+        center = points.mean(axis=0)
+        rel = points - center
+        uv = np.column_stack((rel @ axis_u, rel @ axis_v))
+        polygon = _points_to_polygon(uv)
+        if polygon is None or len(polygon) < 3:
+            polygon = _fallback_rectangle_polygon(uv)
+        if polygon is None or len(polygon) < 3:
+            result["reason"] = "Unable to derive floor contour in fallback projection"
+            _write_status(args.meta_out, result)
+            return
+        used_fallback_projection = True
+    else:
+        n, d, inliers, threshold, dominant_axis_component = floor
+        floor_points = points[inliers]
 
-    center = floor_points.mean(axis=0)
-    axis_u, axis_v = _make_plane_basis(n)
-    rel = floor_points - center
-    uv = np.column_stack((rel @ axis_u, rel @ axis_v))
+        center = floor_points.mean(axis=0)
+        axis_u, axis_v = _make_plane_basis(n)
+        rel = floor_points - center
+        uv = np.column_stack((rel @ axis_u, rel @ axis_v))
 
-    polygon = _points_to_polygon(uv)
-    if polygon is None or len(polygon) < 3:
-        result["reason"] = "Unable to derive floor contour"
-        result["floor_inliers"] = int(len(floor_points))
-        _write_status(args.meta_out, result)
-        return
+        polygon = _points_to_polygon(uv)
+        if polygon is None or len(polygon) < 3:
+            polygon = _fallback_rectangle_polygon(uv)
+        if polygon is None or len(polygon) < 3:
+            result["reason"] = "Unable to derive floor contour"
+            result["floor_inliers"] = int(len(floor_points))
+            _write_status(args.meta_out, result)
+            return
 
     scale = _load_scale(args.measurement)
     if scale is not None:
@@ -418,6 +609,7 @@ def main() -> None:
         units = "model_units"
 
     _polygon_to_svg(polygon_scaled, args.svg_out, units)
+    _polygon_to_png(polygon_scaled, args.png_out, units)
     _write_geojson(polygon_scaled, args.geojson_out)
 
     walls = _wall_lengths(polygon_scaled)
@@ -437,7 +629,12 @@ def main() -> None:
     else:
         reconstruction_quality = "normal"
 
+    if used_fallback_projection:
+        reconstruction_quality = "fallback_projection"
+
     low_confidence = reconstruction_quality == "sparse"
+    if used_fallback_projection:
+        low_confidence = True
 
     result.update({
         "status": "ok",
@@ -460,6 +657,7 @@ def main() -> None:
             "point cloud. Results may be unreliable for non-room scenes (single objects, "
             "ceilings, outdoor areas, or ramps)."
         ),
+        "used_fallback_projection": used_fallback_projection,
         "ransac_threshold": float(threshold),
         "plane_normal": [float(x) for x in n],
         "plane_offset": float(d),
@@ -467,6 +665,7 @@ def main() -> None:
         "min_vertical_axis_component": float(args.min_vertical_axis_component),
         "outputs": {
             "svg": args.svg_out,
+            "png": args.png_out,
             "geojson": args.geojson_out
         }
     })
