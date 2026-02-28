@@ -1725,14 +1725,9 @@ if __name__ == "__main__":
                 (os.path.join(output_path, "floorplan.geojson"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan.geojson"),
                 (os.path.join(output_path, "floorplan_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_metadata.json")
             ]
-            # Note: skip if floorplan generation failed / produced no output.
+            # Note: if floorplan generation failed the file will be missing at run-time;
+            # the execution-time guard in the pipeline's default case will skip the upload.
             for local_path, s3_path in uploads:
-                if not os.path.isfile(local_path):
-                    log.warning(
-                        "Skipping floorplan S3 export because local artifact is missing: %s",
-                        local_path
-                    )
-                    continue
                 args = ["s3", "cp", local_path, s3_path]
                 pipeline.create_component(
                     name=f"S3-Export-Floorplan-{os.path.basename(local_path)}",
@@ -1761,13 +1756,9 @@ if __name__ == "__main__":
                 (os.path.join(output_path, "floorplan_with_objects.svg"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_with_objects.svg"),
                 (os.path.join(output_path, "floorplan_objects_metadata.json"), f"{config['S3_OUTPUT']}/{config['UUID']}/{base_name}_floorplan_objects_metadata.json")
             ]
+            # Note: if object-layer generation failed the file will be missing at run-time;
+            # the execution-time guard in the pipeline's default case will skip the upload.
             for local_path, s3_path in uploads:
-                if not os.path.isfile(local_path):
-                    log.warning(
-                        "Skipping object-layer S3 export because local artifact is missing: %s",
-                        local_path
-                    )
-                    continue
                 args = ["s3", "cp", local_path, s3_path]
                 pipeline.create_component(
                     name=f"S3-Export-ObjectLayer-{os.path.basename(local_path)}",
@@ -2261,11 +2252,15 @@ if __name__ == "__main__":
                         len(component.args) >= 4 and \
                         component.args[0] == "s3" and component.args[1] == "cp":
                         local_source_path = component.args[2]
-                        if component.name.startswith("S3-Export-ObjectLayer-") and \
+                        is_optional_export = (
+                            component.name.startswith("S3-Export-ObjectLayer-") or
+                            component.name.startswith("S3-Export-Floorplan-")
+                        )
+                        if is_optional_export and \
                             not str(local_source_path).startswith("s3://") and \
                             not os.path.isfile(local_source_path):
                             log.warning(
-                                "Skipping optional object-layer export because source file is missing: "
+                                "Skipping optional export because source file is missing: "
                                 f"{local_source_path}"
                             )
                             continue
