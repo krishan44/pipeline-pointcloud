@@ -165,7 +165,7 @@ class GSWorkflowBaseStack(Stack):
                 'SNS_TOPIC_ARN': sns_topic_arn,
                 'LAMBDA_COMPLETE_NAME': lambda_workflow_complete.lambda_function.function_name,
                 'DDB_TABLE_NAME': self.ddb_table_name,
-                'ECR_IMAGE_URI': self.ecr.repository.repository_uri,
+                'ECR_IMAGE_URI': f"{self.ecr.repository.repository_uri}:latest",
                 'CONTAINER_ROLE_NAME': self.container_role_name
                 },
             reserved_concurrent_executions=10,
