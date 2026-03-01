@@ -13,12 +13,5 @@
     "LambdaWorkflowCompleteFunctionName": "GSWorkflowBaseStack-LambdaWorkflowCompleteConstruc-jz8aScDJQjAJ",
     "SfnArnSsmParameterName": "3dgs-sfn-arn-o7vo1a",
     "S3ConstructLoggingBucketNameF302B248": "3dgs-bucket-o7vo1a-logs"
-  },
-  "GSWorkflowPostDeployStack": {
-    "ModelsArchiveLocation": "s3://3dgs-bucket-o7vo1a/models/models.tar.gz",
-    "ECRRepositoryName": "3dgs-ecr-repo-o7vo1a",
-    "ContainerDeploymentDockerImageUri89099063": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/cdk-hnb659fds-container-assets-762233765429-eu-west-2:2d826a3d42b14c6357c65199b8fe3d9155c954d6c73b09303bef96fbe0e058f3",
-    "DeploymentBucketName": "3dgs-bucket-o7vo1a",
-    "ContainerDeploymentECRRepositoryUri33CFE539": "762233765429.dkr.ecr.eu-west-2.amazonaws.com/3dgs-ecr-repo-o7vo1a"
   }
 }
